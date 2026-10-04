@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from starlette.middleware.sessions import SessionMiddleware
 
 from gateline.main import app
@@ -14,3 +16,11 @@ def test_club_filter_accepts_empty_venue():
 
     assert venue is None
     assert errors == []
+
+
+def test_home_uses_club_grid_and_expanded_calendar():
+    template = Path("gateline/templates/home.html").read_text()
+
+    assert 'class="club-grid"' in template
+    assert '<select name="club">' not in template
+    assert '<details class="day" open>' in template
