@@ -2,11 +2,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from decimal import Decimal
 import sys
+import os
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from gateline.database import Base, engine, SessionLocal
 from gateline.models import *
 from gateline.auth import hash_password
 
+if os.getenv("RESET_DEMO_DATABASE") != "1":
+    raise SystemExit("Refusing destructive demo seed. Set RESET_DEMO_DATABASE=1 with a disposable DATABASE_URL.")
 Base.metadata.drop_all(engine); Base.metadata.create_all(engine)
 now=datetime.now(timezone.utc)
 with SessionLocal() as db:
