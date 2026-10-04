@@ -1,8 +1,10 @@
 from datetime import datetime, timezone
 from io import BytesIO, StringIO
+from decimal import Decimal
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 import csv, json, os, qrcode, secrets
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from pydantic import BeforeValidator
@@ -45,9 +47,12 @@ async def log_session(request,call_next):
         with (LOG_DIR/f"{session_id}.log").open("a",encoding="utf-8") as log: log.write(json.dumps(entry)+"\n")
     return response
 app.add_middleware(SessionMiddleware,secret_key=__import__('os').getenv("SECRET_KEY",secrets.token_hex(32)),https_only=False,same_site="lax")
-def render(request,name,**ctx): return templates.TemplateResponse(request,name,{"user":request.state.user,"version":__version__,"quote":quote,**ctx})
+def render(request,template_name,**ctx): return templates.TemplateResponse(request,template_name,{"user":request.state.user,"version":__version__,"quote":quote,**ctx})
 
 OptionalVenueId=Annotated[int|None,BeforeValidator(lambda value: None if value=="" else value)]
+
+def utc_dt(value):
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 def build_calendar(events):
     """Group fixtures by day, from the next kick-off to the furthest away."""
@@ -74,8 +79,9 @@ def home(request:Request,club:str="",venue:OptionalVenueId=None,competition:str=
 @app.get("/clubs/{name}",response_class=HTMLResponse)
 def club_profile(name:str,request:Request,db:Session=Depends(get_db)):
     events=db.scalars(select(Event).where(Event.published==True,or_(Event.home_team==name,Event.away_team==name)).order_by(Event.starts_at)).all()
-    if not events: raise HTTPException(404)
-    return render(request,"profile.html",kind="Club",name=name,events=events)
+    club=db.scalar(select(Club).where(or_(Club.name==name,Club.short_name==name)))
+    if not club and not events: raise HTTPException(404,"Club not found")
+    return render(request,"profile.html",kind="Club",name=club.name if club else name,subtitle=club.address if club else None,events=events)
 @app.get("/venues/{venue_id}",response_class=HTMLResponse)
 def venue_profile(venue_id:int,request:Request,db:Session=Depends(get_db)):
     venue=db.get(Venue,venue_id)
@@ -84,13 +90,19 @@ def venue_profile(venue_id:int,request:Request,db:Session=Depends(get_db)):
 @app.get("/competitions/{name}",response_class=HTMLResponse)
 def competition_profile(name:str,request:Request,db:Session=Depends(get_db)):
     events=db.scalars(select(Event).where(Event.published==True,Event.competition==name).order_by(Event.starts_at)).all()
-    if not events: raise HTTPException(404)
+    if not events: raise HTTPException(404,"Competition not found")
     return render(request,"profile.html",kind="Competition",name=name,events=events)
 @app.get("/events/{event_id}",response_class=HTMLResponse)
 def event_page(event_id:int,request:Request,db:Session=Depends(get_db)):
     event=db.get(Event,event_id)
     if not event or not event.published: raise HTTPException(404)
-    return render(request,"event.html",event=event)
+    now=datetime.now(timezone.utc); availability={}
+    for inv in event.inventories:
+        sold=db.scalar(select(func.count(Ticket.id)).where(Ticket.event_id==event.id,Ticket.section_id==inv.section_id,Ticket.status.in_(["sold","scanned"]))) or 0
+        held=db.scalar(select(func.coalesce(func.sum(Reservation.quantity),0)).where(Reservation.event_id==event.id,Reservation.section_id==inv.section_id,Reservation.completed==False,Reservation.expires_at>now)) or 0
+        availability[inv.section_id]=max(0,inv.capacity-inv.held-sold-held)
+    on_sale=not event.cancelled and not event.sales_suspended and utc_dt(event.sales_open)<=now<=utc_dt(event.sales_close)
+    return render(request,"event.html",event=event,availability=availability,on_sale=on_sale)
 @app.post("/events/{event_id}/reserve")
 def make_reservation(event_id:int,section_id:int=Form(),quantity:int=Form(),seat_ids:str=Form(""),db:Session=Depends(get_db)):
     try:r=reserve(db,event_id,section_id,quantity,[int(x) for x in seat_ids.split(",") if x])
@@ -105,21 +117,23 @@ def checkout_page(token:str,request:Request,db:Session=Depends(get_db)):
 def complete(token:str,full_name:str=Form(),email:str=Form(),address1:str=Form(),address2:str=Form(""),city:str=Form(),postcode:str=Form(),country:str=Form(),class_id:int=Form(),priority_code:str=Form(""),voucher_code:str=Form(""),test_result:str=Form("success"),db:Session=Depends(get_db)):
     try: order=checkout(db,token,class_id,dict(full_name=full_name,email=email,address1=address1,address2=address2,city=city,postcode=postcode,country=country),test_result,priority_code or None,voucher_code or None)
     except ValueError as e: raise HTTPException(400,str(e))
-    return RedirectResponse(f"/orders/{order.reference}",303)
+    return RedirectResponse(f"/orders/{order.reference}?access={order.access_token}",303)
 @app.get("/orders/{reference}",response_class=HTMLResponse)
-def confirmation(reference:str,request:Request,db:Session=Depends(get_db)):
+def confirmation(reference:str,request:Request,access:str="",db:Session=Depends(get_db)):
     order=db.scalar(select(Order).where(Order.reference==reference));
     if not order: raise HTTPException(404)
-    return render(request,"confirmation.html",order=order)
+    if (not request.state.user or request.state.user.role!="admin") and not secrets.compare_digest(access,order.access_token): raise HTTPException(404)
+    return render(request,"confirmation.html",order=order,access=access)
 @app.get("/tickets/{public_id}",response_class=HTMLResponse)
-def ticket_view(public_id:str,request:Request,db:Session=Depends(get_db)):
+def ticket_view(public_id:str,request:Request,access:str="",db:Session=Depends(get_db)):
     ticket=db.scalar(select(Ticket).where(Ticket.public_id==public_id));
     if not ticket: raise HTTPException(404)
-    return render(request,"ticket.html",ticket=ticket,event=db.get(Event,ticket.event_id))
+    if (not request.state.user or request.state.user.role!="admin") and not secrets.compare_digest(access,ticket.order.access_token): raise HTTPException(404)
+    return render(request,"ticket.html",ticket=ticket,event=db.get(Event,ticket.event_id),access=access)
 @app.get("/tickets/{public_id}/qr.png")
-def qr(public_id:str,db:Session=Depends(get_db)):
+def qr(public_id:str,access:str="",db:Session=Depends(get_db)):
     ticket=db.scalar(select(Ticket).where(Ticket.public_id==public_id));
-    if not ticket:raise HTTPException(404)
+    if not ticket or not secrets.compare_digest(access,ticket.order.access_token):raise HTTPException(404)
     out=BytesIO(); qrcode.make(ticket.qr_token).save(out,"PNG"); out.seek(0); return StreamingResponse(out,media_type="image/png")
 
 @app.get("/login",response_class=HTMLResponse)
@@ -133,19 +147,59 @@ def login(request:Request,email:str=Form(),password:str=Form(),db:Session=Depend
 def logout(request:Request):request.session.clear();return RedirectResponse("/",303)
 @app.get("/admin",response_class=HTMLResponse)
 def admin(request:Request,user=Depends(require("admin")),db:Session=Depends(get_db)):
-    events=db.scalars(select(Event).order_by(Event.starts_at)).all(); return render(request,"admin.html",events=events)
+    events=db.scalars(select(Event).order_by(Event.starts_at)).all(); return render(request,"admin.html",events=events,venues=db.scalars(select(Venue).order_by(Venue.name)).all())
+@app.get("/admin/events/new",response_class=HTMLResponse)
+def new_event(request:Request,user=Depends(require("admin")),db:Session=Depends(get_db)):
+    return render(request,"event_admin.html",event=None,venues=db.scalars(select(Venue).order_by(Venue.name)).all())
 @app.post("/admin/events")
-def create_event(request:Request,title:str=Form(),home_team:str=Form(),away_team:str=Form(),competition:str=Form(),venue_id:int=Form(),starts_at:datetime=Form(),sales_open:datetime=Form(),sales_close:datetime=Form(),user=Depends(require("admin")),db:Session=Depends(get_db)):
-    event=Event(title=title,home_team=home_team,away_team=away_team,competition=competition,venue_id=venue_id,starts_at=starts_at,sales_open=sales_open,sales_close=sales_close,published=False);db.add(event);db.flush();db.add(AuditLog(user_id=user.id,action="event.created",entity="event",entity_id=str(event.id)));db.commit();return RedirectResponse("/admin",303)
+def create_event(request:Request,title:str=Form(),home_team:str=Form(),away_team:str=Form(),competition:str=Form(),venue_id:int=Form(),starts_at:datetime=Form(),sales_open:datetime=Form(),sales_close:datetime=Form(),adult_price:Decimal=Form(),user=Depends(require("admin")),db:Session=Depends(get_db)):
+    venue=db.get(Venue,venue_id)
+    if not venue or sales_open>=sales_close or sales_close>starts_at or adult_price<0: raise HTTPException(422,"Check venue, dates and price")
+    london=ZoneInfo("Europe/London"); to_utc=lambda value:(value.replace(tzinfo=london) if value.tzinfo is None else value).astimezone(timezone.utc)
+    event=Event(title=title.strip(),home_team=home_team.strip(),away_team=away_team.strip(),competition=competition.strip(),venue_id=venue_id,starts_at=to_utc(starts_at),sales_open=to_utc(sales_open),sales_close=to_utc(sales_close),published=False);db.add(event);db.flush()
+    for stand in venue.stands:
+        for section in stand.sections: db.add(EventInventory(event_id=event.id,section_id=section.id,capacity=section.capacity))
+    db.add(TicketClass(event_id=event.id,name="Adult",description="Standard admission",price=adult_price,minimum=1,maximum=10))
+    db.add(AuditLog(user_id=user.id,action="event.created",entity="event",entity_id=str(event.id)));db.commit();return RedirectResponse(f"/admin/events/{event.id}",303)
+@app.get("/admin/events/{event_id}",response_class=HTMLResponse)
+def admin_event(event_id:int,request:Request,user=Depends(require("admin")),db:Session=Depends(get_db)):
+    event=db.get(Event,event_id)
+    if not event: raise HTTPException(404)
+    return render(request,"event_admin.html",event=event,venues=db.scalars(select(Venue).order_by(Venue.name)).all())
+@app.post("/admin/events/{event_id}/state")
+def event_state(event_id:int,request:Request,action:str=Form(),reason:str=Form(""),user=Depends(require("admin")),db:Session=Depends(get_db)):
+    event=db.get(Event,event_id)
+    if not event: raise HTTPException(404)
+    if action=="publish":
+        if not event.inventories or not event.classes: raise HTTPException(409,"Configure inventory and ticket classes before publishing")
+        event.published=True
+    elif action=="unpublish": event.published=False
+    elif action=="suspend": event.sales_suspended=True
+    elif action=="reopen": event.sales_suspended=False
+    elif action=="cancel": event.cancelled=True; event.sales_suspended=True
+    elif action=="archive": event.archived=True; event.published=False
+    else: raise HTTPException(422,"Unknown fixture action")
+    db.add(AuditLog(user_id=user.id,action=f"event.{action}:{reason[:200]}",entity="event",entity_id=str(event.id)));db.commit();return RedirectResponse(f"/admin/events/{event.id}",303)
 @app.post("/admin/events/{event_id}/publish")
 def publish(event_id:int,request:Request,user=Depends(require("admin")),db:Session=Depends(get_db)):
     e=db.get(Event,event_id);e.published=not e.published;db.add(AuditLog(user_id=user.id,action="event.published" if e.published else "event.unpublished",entity="event",entity_id=str(e.id)));db.commit();return RedirectResponse("/admin",303)
 @app.get("/admin/events/{event_id}/attendance",response_class=HTMLResponse)
 def attendance(event_id:int,request:Request,user=Depends(require("admin")),db:Session=Depends(get_db)):
-    tickets=db.scalars(select(Ticket).where(Ticket.event_id==event_id)).all(); capacity=db.scalar(select(func.sum(EventInventory.capacity)).where(EventInventory.event_id==event_id)) or 0;return render(request,"attendance.html",event=db.get(Event,event_id),tickets=tickets,capacity=capacity)
+    event=db.get(Event,event_id)
+    if not event: raise HTTPException(404)
+    tickets=db.scalars(select(Ticket).where(Ticket.event_id==event_id)).all(); capacity=db.scalar(select(func.sum(EventInventory.capacity-EventInventory.held)).where(EventInventory.event_id==event_id)) or 0
+    now=datetime.now(timezone.utc); reserved=db.scalar(select(func.coalesce(func.sum(Reservation.quantity),0)).where(Reservation.event_id==event_id,Reservation.completed==False,Reservation.expires_at>now)) or 0
+    valid=[t for t in tickets if t.status in ("sold","scanned")]; scanned=sum(t.status=="scanned" for t in valid); cancelled=sum(t.status in ("cancelled","refunded") for t in tickets)
+    orders=db.scalars(select(Order).where(Order.event_id==event_id,Order.payment_status=="successful")).all(); gross=sum((o.total for o in orders),Decimal("0")); discounts=sum((o.discount for o in orders),Decimal("0"))
+    stats={"capacity":capacity,"reserved":reserved,"issued":len(valid),"available":max(0,capacity-reserved-len(valid)),"scanned":scanned,"yet":max(0,len(valid)-scanned),"cancelled":cancelled,"sales":gross,"discounts":discounts,"utilisation":round(100*len(valid)/capacity,1) if capacity else 0,"admission_rate":round(100*scanned/len(valid),1) if valid else 0}
+    return render(request,"attendance.html",event=event,tickets=tickets,capacity=capacity,stats=stats,updated=now)
 @app.post("/admin/tickets/{ticket_id}/cancel")
 def cancel(ticket_id:int,request:Request,reason:str=Form(""),user=Depends(require("admin")),db:Session=Depends(get_db)):
-    t=db.get(Ticket,ticket_id);t.status="cancelled";t.cancelled_at=datetime.now(timezone.utc);t.cancelled_by=user.id;t.cancellation_reason=reason;db.add(AuditLog(user_id=user.id,action="ticket.cancelled",entity="ticket",entity_id=str(t.id)));db.commit();return RedirectResponse(f"/admin/events/{t.event_id}/attendance",303)
+    t=db.get(Ticket,ticket_id)
+    if not t: raise HTTPException(404)
+    if t.status not in ("cancelled","refunded"):
+        t.status="cancelled";t.cancelled_at=datetime.now(timezone.utc);t.cancelled_by=user.id;t.cancellation_reason=reason[:500];db.add(AuditLog(user_id=user.id,action="ticket.cancelled",entity="ticket",entity_id=str(t.id)));db.commit()
+    return RedirectResponse(f"/admin/events/{t.event_id}/attendance",303)
 @app.get("/admin/search",response_class=HTMLResponse)
 def search(request:Request,q:str="",user=Depends(require("admin")),db:Session=Depends(get_db)):
     orders=db.scalars(select(Order).join(Customer).where(or_(Order.reference.ilike(f"%{q}%"),Customer.full_name.ilike(f"%{q}%"),Customer.email.ilike(f"%{q}%")))).all() if q else []; tickets=db.scalars(select(Ticket).where(Ticket.public_id.ilike(f"%{q}%"))).all() if q else [];return render(request,"search.html",q=q,orders=orders,tickets=tickets)

@@ -4,6 +4,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from gateline.main import app
 from gateline.main import build_calendar
+from gateline import __version__
 
 
 def test_session_middleware_wraps_request_middleware():
@@ -37,3 +38,15 @@ def test_calendar_orders_events_from_soonest_to_furthest():
     calendar = build_calendar([later, soonest])
 
     assert [event for _, events in calendar for event in events] == [soonest, later]
+
+
+def test_v018_admin_and_camera_interfaces_are_discoverable():
+    admin = Path("gateline/templates/admin.html").read_text()
+    gate = Path("gateline/templates/gate.html").read_text()
+
+    assert __version__ == "0.1.8"
+    assert "/admin/events/new" in admin
+    assert "Take QR photo" in gate
+    assert "getUserMedia" in gate
+    assert "BarcodeDetector" in gate
+    assert "replaceChildren" in gate
