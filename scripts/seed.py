@@ -1,4 +1,12 @@
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+import sys
+
+# Executing a file sets sys.path[0] to its directory rather than the project
+# root. Add the root so the documented `python scripts/seed.py` command can
+# import the adjacent gateline package without requiring an editable install.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from gateline.database import Base, engine, SessionLocal
 from gateline.models import *
 from gateline.auth import hash_password
