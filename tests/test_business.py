@@ -30,6 +30,6 @@ def test_priority_voucher_and_scanning(db):
  d,x=db;now=datetime.now(timezone.utc);x["event"].priority_until=now+timedelta(hours=1);p=PriorityIdentifier(code="ST1",maximum=1);v=Voucher(code="SAVE",kind="percentage",value=10,starts_at=now-timedelta(hours=1),expires_at=now+timedelta(hours=1),maximum_uses=1,enabled=True);d.add_all([p,v]);d.commit();r=reserve(d,x["event"].id,x["section"].id,1,[])
  with pytest.raises(ValueError):checkout(d,r.token,x["class"].id,customer(),priority_code="BAD")
  o=checkout(d,r.token,x["class"].id,customer(),priority_code="ST1",voucher_code="SAVE");assert o.total==Decimal("9.00")
- t=o.tickets[0];assert scan_ticket(d,t.qr_token,x["event"].id,x["operator"])["result"]=="VALID";assert scan_ticket(d,t.qr_token,x["event"].id,x["operator"])["result"]=="ALREADY USED"
+ t=o.tickets[0];assert scan_ticket(d,t.qr_token,x["event"].id,x["operator"])["result"]=="VALID";assert scan_ticket(d,t.public_id.lower(),x["event"].id,x["operator"])["result"]=="ALREADY USED"
  t.status="cancelled";d.commit();assert scan_ticket(d,t.qr_token,x["event"].id,x["operator"])["result"]=="INVALID TICKET"
  t.status="refunded";d.commit();assert scan_ticket(d,t.qr_token,x["event"].id,x["operator"])["result"]=="INVALID TICKET"

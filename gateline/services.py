@@ -63,7 +63,9 @@ def checkout(db:Session, reservation_token:str, class_id:int, customer_data:dict
     db.commit(); db.refresh(order); return order
 
 def scan_ticket(db, token, event_id, operator, gate=None, override=False):
-    ticket=db.scalar(select(Ticket).where(Ticket.qr_token==token))
+    # Hardware scanners submit the opaque QR payload, while gate staff may need
+    # to type the supporter-facing ticket ID when a code cannot be read.
+    ticket=db.scalar(select(Ticket).where((Ticket.qr_token==token)|(func.upper(Ticket.public_id)==token.upper())))
     if not ticket or ticket.event_id!=event_id or ticket.status in ["cancelled","refunded","expired"]: return {"result":"INVALID TICKET","detail": ticket.status.upper() if ticket else "UNKNOWN TICKET"}
     prior=db.scalar(select(Scan).where(Scan.ticket_id==ticket.id,Scan.result=="valid"))
     if ticket.status=="scanned" or prior:return {"result":"ALREADY USED","detail":prior.scanned_at.isoformat() if prior else "Previously scanned"}
