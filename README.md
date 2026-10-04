@@ -13,9 +13,17 @@ SECRET_KEY='replace-me' uv run uvicorn gateline.main:app --reload
 ```
 Open http://127.0.0.1:8000. To retain data, do not re-run the destructive demo seed command. Production deployments must use HTTPS, a persistent `SECRET_KEY`, secure-cookie configuration and PostgreSQL.
 
-### Demo credentials (local development only)
-* Administrator: `admin@gateline.test` / `Admin123!`
-* Gate operator: `gate@gateline.test` / `Gate123!`
+### Staff login (local development only)
+After seeding the database, open [http://127.0.0.1:8000/login](http://127.0.0.1:8000/login) and sign in with one of these demo staff accounts:
+
+| Role | Email | Password | Access |
+| --- | --- | --- | --- |
+| Administrator | `admin@gateline.test` | `Admin123!` | Event dashboard, attendance, ticket search and cancellation |
+| Gate operator | `gate@gateline.test` | `Gate123!` | Gate 1 ticket scanner |
+
+These credentials are created by `scripts/seed.py` and must not be used in production.
+
+### Other demo data
 * Priority numbers: `ST001234`, `ST005678`
 
 ## Database and migrations

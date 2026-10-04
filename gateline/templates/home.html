@@ -1,11 +1,18 @@
 {% extends 'base.html' %}{% block content %}
 <section class="compact-head"><div><p class="eyebrow">MATCH TICKETS</p><h1>Find your fixture</h1></div><p>Official tickets, without the fuss.</p></section>
+<section class="club-picker" aria-labelledby="club-picker-title">
+ <div class="section-title"><div><p class="eyebrow">YOUR CLUB</p><h2 id="club-picker-title">Browse by club</h2></div><span>Choose a team to filter fixtures</span></div>
+ <div class="club-grid">
+  <a class="club-card {{'active' if not filters.club}}" href="/?{% if filters.venue %}venue={{filters.venue}}&{% endif %}{% if filters.competition %}competition={{quote(filters.competition)}}&{% endif %}{% if filters.date %}date={{filters.date}}{% endif %}" {% if not filters.club %}aria-current="true"{% endif %}>All clubs</a>
+  {% for name in clubs %}<a class="club-card {{'active' if filters.club==name}}" href="/?club={{quote(name)}}{% if filters.venue %}&venue={{filters.venue}}{% endif %}{% if filters.competition %}&competition={{quote(filters.competition)}}{% endif %}{% if filters.date %}&date={{filters.date}}{% endif %}" {% if filters.club==name %}aria-current="true"{% endif %}>{{name}}</a>{% endfor %}
+ </div>
+</section>
 <form class="filters" method="get">
- <label>Club<select name="club"><option value="">All clubs</option>{% for name in clubs %}<option {{'selected' if filters.club==name}}>{{name}}</option>{% endfor %}</select></label>
+ <input type="hidden" name="club" value="{{filters.club}}">
  <label>Stadium<select name="venue"><option value="">All stadiums</option>{% for item in venues %}<option value="{{item.id}}" {{'selected' if filters.venue==item.id}}>{{item.name}}</option>{% endfor %}</select></label>
  <label>Competition<select name="competition"><option value="">All competitions</option>{% for name in competitions %}<option {{'selected' if filters.competition==name}}>{{name}}</option>{% endfor %}</select></label>
  <label>Date<input type="date" name="date" value="{{filters.date}}"></label><button>Filter</button><a href="/" class="clear">Clear</a>
 </form>
 <section><div class="section-title"><h2>Fixtures</h2><span>{{events|length}} matches</span></div><div class="calendar" aria-label="Fixture calendar">
-{% for day, day_events in calendar %}<details class="day" {{'open' if filters.date}}><summary><b>{{day.strftime('%d')}}</b><span>{{day.strftime('%b %Y')}}</span><em>{{day_events|length}} match{{'' if day_events|length==1 else 'es'}}</em></summary><div class="day-events">{% for e in day_events %}{% include '_match.html' %}{% endfor %}</div></details>{% else %}<div class="empty">No fixtures match these filters.</div>{% endfor %}
+{% for day, day_events in calendar %}<details class="day" open><summary><b>{{day.strftime('%d')}}</b><span>{{day.strftime('%b %Y')}}</span><em>{{day_events|length}} match{{'' if day_events|length==1 else 'es'}}</em></summary><div class="day-events">{% for e in day_events %}{% include '_match.html' %}{% endfor %}</div></details>{% else %}<div class="empty">No fixtures match these filters.</div>{% endfor %}
 </div></section>{% endblock %}
