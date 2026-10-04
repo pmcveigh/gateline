@@ -5,6 +5,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from .models import *
 
+def utc(value: datetime) -> datetime:
+    """Return a comparable UTC datetime (SQLite drops timezone metadata)."""
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
 class PaymentResult:
     def __init__(self, successful: bool): self.successful=successful; self.reference="TEST-"+secrets.token_hex(5).upper()
 class PaymentService:
@@ -35,15 +39,15 @@ def reserve(db:Session,event_id:int,section_id:int,quantity:int,seat_ids:list[in
 def voucher_discount(db, code, event_id, subtotal):
     if not code:return Decimal("0")
     now=datetime.now(timezone.utc); v=db.scalar(select(Voucher).where(func.upper(Voucher.code)==code.upper()))
-    if not v or not v.enabled or v.starts_at>now or v.expires_at<now or v.uses>=v.maximum_uses or (v.event_id and v.event_id!=event_id): raise ValueError("Voucher code is not valid")
+    if not v or not v.enabled or utc(v.starts_at)>now or utc(v.expires_at)<now or v.uses>=v.maximum_uses or (v.event_id and v.event_id!=event_id): raise ValueError("Voucher code is not valid")
     return min(subtotal, v.value if v.kind=="fixed" else subtotal*v.value/100)
 
 def checkout(db:Session, reservation_token:str, class_id:int, customer_data:dict, payment_result="success", priority_code=None, voucher_code=None):
     now=datetime.now(timezone.utc); reservations=db.scalars(select(Reservation).where((Reservation.token==reservation_token)|(Reservation.token.like(reservation_token+"-%")),Reservation.completed==False)).all()
-    if not reservations or reservations[0].expires_at<now: raise ValueError("Reservation has expired")
+    if not reservations or utc(reservations[0].expires_at)<now: raise ValueError("Reservation has expired")
     event=db.get(Event,reservations[0].event_id); tc=db.get(TicketClass,class_id); qty=sum(r.quantity for r in reservations)
     if not tc or tc.event_id!=event.id: raise ValueError("Invalid ticket class")
-    if event.priority_until and now<event.priority_until:
+    if event.priority_until and now<utc(event.priority_until):
         priority=db.scalar(select(PriorityIdentifier).where(PriorityIdentifier.code==priority_code))
         if not priority or priority.used+qty>priority.maximum: raise ValueError("A valid season-ticket number with sufficient entitlement is required")
     else: priority=None
