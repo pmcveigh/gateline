@@ -21,6 +21,11 @@ def test_payment_creates_individual_tickets_and_failed_does_not(db):
  d,x=db;r=reserve(d,x["event"].id,x["section"].id,2,[]);o=checkout(d,r.token,x["class"].id,customer());assert len(o.tickets)==2 and o.tickets[0].qr_token!=o.tickets[1].qr_token
  # Add capacity for failed transaction, whose order remains auditable but issues no tickets.
  d.scalar(select(EventInventory)).capacity=3;d.commit();r=reserve(d,x["event"].id,x["section"].id,1,[]);o=checkout(d,r.token,x["class"].id,customer(),"fail");assert o.payment_status=="failed" and not o.tickets
+def test_checkout_accepts_sqlite_naive_expiry(db):
+ d,x=db;r=reserve(d,x["event"].id,x["section"].id,1,[])
+ # SQLite returns DateTime values without their UTC tzinfo; checkout must normalize them.
+ r.expires_at=r.expires_at.replace(tzinfo=None);d.commit()
+ assert checkout(d,r.token,x["class"].id,customer()).status=="complete"
 def test_priority_voucher_and_scanning(db):
  d,x=db;now=datetime.now(timezone.utc);x["event"].priority_until=now+timedelta(hours=1);p=PriorityIdentifier(code="ST1",maximum=1);v=Voucher(code="SAVE",kind="percentage",value=10,starts_at=now-timedelta(hours=1),expires_at=now+timedelta(hours=1),maximum_uses=1,enabled=True);d.add_all([p,v]);d.commit();r=reserve(d,x["event"].id,x["section"].id,1,[])
  with pytest.raises(ValueError):checkout(d,r.token,x["class"].id,customer(),priority_code="BAD")

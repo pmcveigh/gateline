@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from io import BytesIO, StringIO
-import csv, qrcode, secrets
+from pathlib import Path
+from urllib.parse import quote
+import csv, json, os, qrcode, secrets
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -16,8 +18,9 @@ from .services import checkout, reserve, scan_ticket
 
 app=FastAPI(title="Gateline",version=__version__)
 app.mount("/static",StaticFiles(directory="gateline/static"),name="static"); templates=Jinja2Templates(directory="gateline/templates")
+LOG_DIR=Path(os.path.expanduser(os.getenv("GATELINE_LOG_DIR", "~/gateline/logs")))
 @app.on_event("startup")
-def startup(): Base.metadata.create_all(engine)
+def startup(): Base.metadata.create_all(engine); LOG_DIR.mkdir(parents=True,exist_ok=True)
 @app.middleware("http")
 async def load_user(request,call_next):
     request.state.user=None
@@ -25,12 +28,55 @@ async def load_user(request,call_next):
     if uid:
         with Session(engine) as db: request.state.user=db.get(User,uid)
     return await call_next(request)
+@app.middleware("http")
+async def log_session(request,call_next):
+    session_id=request.session.setdefault("log_session_id",secrets.token_hex(12))
+    started=datetime.now(timezone.utc)
+    try:
+        response=await call_next(request); status=response.status_code
+    except Exception:
+        status=500
+        raise
+    finally:
+        LOG_DIR.mkdir(parents=True,exist_ok=True)
+        entry={"at":started.isoformat(),"method":request.method,"path":request.url.path,"status":status}
+        with (LOG_DIR/f"{session_id}.log").open("a",encoding="utf-8") as log: log.write(json.dumps(entry)+"\n")
+    return response
 app.add_middleware(SessionMiddleware,secret_key=__import__('os').getenv("SECRET_KEY",secrets.token_hex(32)),https_only=False,same_site="lax")
-def render(request,name,**ctx): return templates.TemplateResponse(request,name,{"user":request.state.user,"version":__version__,**ctx})
+def render(request,name,**ctx): return templates.TemplateResponse(request,name,{"user":request.state.user,"version":__version__,"quote":quote,**ctx})
 
 @app.get("/",response_class=HTMLResponse)
-def home(request:Request,db:Session=Depends(get_db)):
-    now=datetime.now(timezone.utc); events=db.scalars(select(Event).where(Event.published==True,Event.cancelled==False,Event.sales_open<=now,Event.sales_close>=now)).all(); return render(request,"home.html",events=events)
+def home(request:Request,club:str="",venue:int|None=None,competition:str="",date:str="",db:Session=Depends(get_db)):
+    query=select(Event).where(Event.published==True,Event.cancelled==False)
+    if club: query=query.where(or_(Event.home_team==club,Event.away_team==club))
+    if venue: query=query.where(Event.venue_id==venue)
+    if competition: query=query.where(Event.competition==competition)
+    events=db.scalars(query.order_by(Event.starts_at)).all()
+    if date: events=[event for event in events if event.starts_at.date().isoformat()==date]
+    clubs=sorted({name for event in db.scalars(select(Event).where(Event.published==True)) for name in (event.home_team,event.away_team)})
+    venues=db.scalars(select(Venue).join(Event).where(Event.published==True).distinct().order_by(Venue.name)).all()
+    competitions=db.scalars(select(Event.competition).where(Event.published==True).distinct().order_by(Event.competition)).all()
+    calendar=[]
+    for event in events:
+        day=event.starts_at.date()
+        if not calendar or calendar[-1][0]!=day: calendar.append((day,[]))
+        calendar[-1][1].append(event)
+    return render(request,"home.html",events=events,calendar=calendar,clubs=clubs,venues=venues,competitions=competitions,filters={"club":club,"venue":venue,"competition":competition,"date":date})
+@app.get("/clubs/{name}",response_class=HTMLResponse)
+def club_profile(name:str,request:Request,db:Session=Depends(get_db)):
+    events=db.scalars(select(Event).where(Event.published==True,or_(Event.home_team==name,Event.away_team==name)).order_by(Event.starts_at)).all()
+    if not events: raise HTTPException(404)
+    return render(request,"profile.html",kind="Club",name=name,events=events)
+@app.get("/venues/{venue_id}",response_class=HTMLResponse)
+def venue_profile(venue_id:int,request:Request,db:Session=Depends(get_db)):
+    venue=db.get(Venue,venue_id)
+    if not venue: raise HTTPException(404)
+    return render(request,"profile.html",kind="Stadium",name=venue.name,subtitle=venue.address,events=db.scalars(select(Event).where(Event.published==True,Event.venue_id==venue_id).order_by(Event.starts_at)).all())
+@app.get("/competitions/{name}",response_class=HTMLResponse)
+def competition_profile(name:str,request:Request,db:Session=Depends(get_db)):
+    events=db.scalars(select(Event).where(Event.published==True,Event.competition==name).order_by(Event.starts_at)).all()
+    if not events: raise HTTPException(404)
+    return render(request,"profile.html",kind="Competition",name=name,events=events)
 @app.get("/events/{event_id}",response_class=HTMLResponse)
 def event_page(event_id:int,request:Request,db:Session=Depends(get_db)):
     event=db.get(Event,event_id)

@@ -1,1 +1,11 @@
-{% extends 'base.html' %}{% block content %}<section class="hero"><p class="eyebrow">MATCH TICKETS</p><h1>Be there when it matters.</h1><p>Book official match tickets securely in a few quick steps.</p></section><section><div class="section-title"><h2>On sale now</h2><span>{{events|length}} fixtures</span></div><div class="cards">{% for e in events %}<article class="match"><div class="date">{{e.starts_at.strftime('%d')}}<small>{{e.starts_at.strftime('%b')|upper}}</small></div><div><span class="tag">{{e.competition}}</span><h3>{{e.title}}</h3><p>{{e.venue.name}} · {{e.starts_at.strftime('%A %d %B, %H:%M')}}</p></div><a class="button" href="/events/{{e.id}}">Buy tickets</a></article>{% else %}<div class="empty">No fixtures are currently on sale.</div>{% endfor %}</div></section>{% endblock %}
+{% extends 'base.html' %}{% block content %}
+<section class="compact-head"><div><p class="eyebrow">MATCH TICKETS</p><h1>Find your fixture</h1></div><p>Official tickets, without the fuss.</p></section>
+<form class="filters" method="get">
+ <label>Club<select name="club"><option value="">All clubs</option>{% for name in clubs %}<option {{'selected' if filters.club==name}}>{{name}}</option>{% endfor %}</select></label>
+ <label>Stadium<select name="venue"><option value="">All stadiums</option>{% for item in venues %}<option value="{{item.id}}" {{'selected' if filters.venue==item.id}}>{{item.name}}</option>{% endfor %}</select></label>
+ <label>Competition<select name="competition"><option value="">All competitions</option>{% for name in competitions %}<option {{'selected' if filters.competition==name}}>{{name}}</option>{% endfor %}</select></label>
+ <label>Date<input type="date" name="date" value="{{filters.date}}"></label><button>Filter</button><a href="/" class="clear">Clear</a>
+</form>
+<section><div class="section-title"><h2>Fixtures</h2><span>{{events|length}} matches</span></div><div class="calendar" aria-label="Fixture calendar">
+{% for day, day_events in calendar %}<details class="day" {{'open' if filters.date}}><summary><b>{{day.strftime('%d')}}</b><span>{{day.strftime('%b %Y')}}</span><em>{{day_events|length}} match{{'' if day_events|length==1 else 'es'}}</em></summary><div class="day-events">{% for e in day_events %}{% include '_match.html' %}{% endfor %}</div></details>{% else %}<div class="empty">No fixtures match these filters.</div>{% endfor %}
+</div></section>{% endblock %}
