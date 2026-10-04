@@ -15,7 +15,6 @@ from .models import *
 from .services import checkout, reserve, scan_ticket
 
 app=FastAPI(title="Gateline",version=__version__)
-app.add_middleware(SessionMiddleware,secret_key=__import__('os').getenv("SECRET_KEY",secrets.token_hex(32)),https_only=False,same_site="lax")
 app.mount("/static",StaticFiles(directory="gateline/static"),name="static"); templates=Jinja2Templates(directory="gateline/templates")
 @app.on_event("startup")
 def startup(): Base.metadata.create_all(engine)
@@ -26,6 +25,7 @@ async def load_user(request,call_next):
     if uid:
         with Session(engine) as db: request.state.user=db.get(User,uid)
     return await call_next(request)
+app.add_middleware(SessionMiddleware,secret_key=__import__('os').getenv("SECRET_KEY",secrets.token_hex(32)),https_only=False,same_site="lax")
 def render(request,name,**ctx): return templates.TemplateResponse(request,name,{"user":request.state.user,"version":__version__,**ctx})
 
 @app.get("/",response_class=HTMLResponse)

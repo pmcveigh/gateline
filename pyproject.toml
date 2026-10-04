@@ -5,7 +5,7 @@ description = "Football-first ticket sales and gate validation"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115", "uvicorn>=0.34", "sqlalchemy>=2.0", "jinja2>=3.1",
-  "python-multipart>=0.0.20", "passlib[bcrypt]>=1.7", "itsdangerous>=2.2",
+  "python-multipart>=0.0.20", "passlib[bcrypt]>=1.7", "bcrypt<5", "itsdangerous>=2.2",
   "qrcode[pil]>=8.0", "pydantic-settings>=2.7"
 ]
 
