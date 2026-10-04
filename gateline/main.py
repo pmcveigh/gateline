@@ -1,9 +1,11 @@
 from datetime import datetime, timezone
 from io import BytesIO, StringIO
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import quote
 import csv, json, os, qrcode, secrets
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from pydantic import BeforeValidator
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -45,8 +47,10 @@ async def log_session(request,call_next):
 app.add_middleware(SessionMiddleware,secret_key=__import__('os').getenv("SECRET_KEY",secrets.token_hex(32)),https_only=False,same_site="lax")
 def render(request,name,**ctx): return templates.TemplateResponse(request,name,{"user":request.state.user,"version":__version__,"quote":quote,**ctx})
 
+OptionalVenueId=Annotated[int|None,BeforeValidator(lambda value: None if value=="" else value)]
+
 @app.get("/",response_class=HTMLResponse)
-def home(request:Request,club:str="",venue:int|None=None,competition:str="",date:str="",db:Session=Depends(get_db)):
+def home(request:Request,club:str="",venue:OptionalVenueId=None,competition:str="",date:str="",db:Session=Depends(get_db)):
     query=select(Event).where(Event.published==True,Event.cancelled==False)
     if club: query=query.where(or_(Event.home_team==club,Event.away_team==club))
     if venue: query=query.where(Event.venue_id==venue)
