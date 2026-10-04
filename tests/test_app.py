@@ -3,6 +3,7 @@ from pathlib import Path
 from starlette.middleware.sessions import SessionMiddleware
 
 from gateline.main import app
+from gateline.main import build_calendar
 
 
 def test_session_middleware_wraps_request_middleware():
@@ -24,3 +25,15 @@ def test_home_uses_club_grid_and_expanded_calendar():
     assert 'class="club-grid"' in template
     assert '<select name="club">' not in template
     assert '<details class="day" open>' in template
+
+
+def test_calendar_orders_events_from_soonest_to_furthest():
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    later = SimpleNamespace(starts_at=datetime(2027, 3, 2, 15, tzinfo=timezone.utc))
+    soonest = SimpleNamespace(starts_at=datetime(2026, 11, 1, 19, 45, tzinfo=timezone.utc))
+
+    calendar = build_calendar([later, soonest])
+
+    assert [event for _, events in calendar for event in events] == [soonest, later]

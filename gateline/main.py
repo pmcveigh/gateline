@@ -49,9 +49,18 @@ def render(request,name,**ctx): return templates.TemplateResponse(request,name,{
 
 OptionalVenueId=Annotated[int|None,BeforeValidator(lambda value: None if value=="" else value)]
 
+def build_calendar(events):
+    """Group fixtures by day, from the next kick-off to the furthest away."""
+    calendar=[]
+    for event in sorted(events,key=lambda item:item.starts_at):
+        day=event.starts_at.date()
+        if not calendar or calendar[-1][0]!=day: calendar.append((day,[]))
+        calendar[-1][1].append(event)
+    return calendar
+
 @app.get("/",response_class=HTMLResponse)
 def home(request:Request,club:str="",venue:OptionalVenueId=None,competition:str="",date:str="",db:Session=Depends(get_db)):
-    query=select(Event).where(Event.published==True,Event.cancelled==False)
+    query=select(Event).where(Event.published==True,Event.cancelled==False,Event.starts_at>=datetime.now(timezone.utc))
     if club: query=query.where(or_(Event.home_team==club,Event.away_team==club))
     if venue: query=query.where(Event.venue_id==venue)
     if competition: query=query.where(Event.competition==competition)
@@ -60,11 +69,7 @@ def home(request:Request,club:str="",venue:OptionalVenueId=None,competition:str=
     clubs=sorted({name for event in db.scalars(select(Event).where(Event.published==True)) for name in (event.home_team,event.away_team)})
     venues=db.scalars(select(Venue).join(Event).where(Event.published==True).distinct().order_by(Venue.name)).all()
     competitions=db.scalars(select(Event.competition).where(Event.published==True).distinct().order_by(Event.competition)).all()
-    calendar=[]
-    for event in events:
-        day=event.starts_at.date()
-        if not calendar or calendar[-1][0]!=day: calendar.append((day,[]))
-        calendar[-1][1].append(event)
+    calendar=build_calendar(events)
     return render(request,"home.html",events=events,calendar=calendar,clubs=clubs,venues=venues,competitions=competitions,filters={"club":club,"venue":venue,"competition":competition,"date":date})
 @app.get("/clubs/{name}",response_class=HTMLResponse)
 def club_profile(name:str,request:Request,db:Session=Depends(get_db)):
