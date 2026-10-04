@@ -1,0 +1,2 @@
+-- v0.1.0 baseline. SQLAlchemy metadata is the canonical cross-database schema.
+-- Initialise development with: uv run python scripts/seed.py
