@@ -25,6 +25,9 @@ These credentials are created by `scripts/seed.py` and must not be used in produ
 
 ### Other demo data
 * Priority numbers: `ST001234`, `ST005678`
+* 36 sample home fixtures across the 2026/27 NIFL Premiership and Championship,
+  and the 2026 NIFL Women's Premiership
+* All 36 clubs and their 28 home stadiums, including grounds shared across teams
 
 ## Database and migrations
 The application creates a new schema on first start. Schema evolution lives in `migrations/`; for this initial baseline run the included SQL or the seed script. Set `DATABASE_URL=postgresql+psycopg://...` for PostgreSQL and install its driver.
@@ -40,7 +43,7 @@ Tests cover reservation exclusivity/capacity/expiry, priority and voucher enforc
 * `gateline/services.py` — transactional reservations, checkout/payment, discounts and validation.
 * `gateline/main.py` — public, administration and restricted gate HTTP surfaces.
 * `gateline/templates`, `gateline/static` — server-rendered responsive product UI.
-* `scripts/seed.py` — immediately demonstrable Glentoran/The Oval data.
+* `scripts/seed.py` — demo fixtures for all clubs and stadiums in the seeded NIFL competitions.
 * `tests/` — critical business rules.
 
 ## Current limitations and roadmap
