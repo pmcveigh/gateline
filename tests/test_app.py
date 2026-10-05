@@ -1,7 +1,9 @@
 from pathlib import Path
 
+from sqlalchemy import create_engine, inspect, text
 from starlette.middleware.sessions import SessionMiddleware
 
+from gateline import database
 from gateline.main import app
 from gateline.main import build_calendar
 from gateline import __version__
@@ -50,3 +52,34 @@ def test_v018_admin_and_camera_interfaces_are_discoverable():
     assert "getUserMedia" in gate
     assert "BarcodeDetector" in gate
     assert "replaceChildren" in gate
+
+
+def test_schema_upgrade_updates_an_existing_database(monkeypatch, tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy.db'}")
+    with engine.begin() as connection:
+        connection.execute(
+            text("CREATE TABLE events (id INTEGER PRIMARY KEY, title VARCHAR(200))")
+        )
+        connection.execute(
+            text("CREATE TABLE orders (id INTEGER PRIMARY KEY, reference VARCHAR)")
+        )
+        connection.execute(
+            text("INSERT INTO orders (id, reference) VALUES (1, 'ORDER-1')")
+        )
+
+    monkeypatch.setattr(database, "engine", engine)
+    database.upgrade_schema()
+    database.upgrade_schema()
+
+    with engine.connect() as connection:
+        event_columns = {
+            column["name"]: column
+            for column in inspect(connection).get_columns("events")
+        }
+        token = connection.scalar(
+            text("SELECT access_token FROM orders WHERE id = 1")
+        )
+
+    assert event_columns["sales_suspended"]["nullable"] is False
+    assert event_columns["archived"]["nullable"] is False
+    assert token

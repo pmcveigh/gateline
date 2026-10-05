@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 from . import __version__
 from .auth import require, verify
-from .database import Base, engine, get_db
+from .database import Base, engine, get_db, upgrade_schema
 from .models import *
 from .services import checkout, reserve, scan_ticket
 
@@ -24,7 +24,10 @@ app=FastAPI(title="Gateline",version=__version__)
 app.mount("/static",StaticFiles(directory="gateline/static"),name="static"); templates=Jinja2Templates(directory="gateline/templates")
 LOG_DIR=Path(os.path.expanduser(os.getenv("GATELINE_LOG_DIR", "~/gateline/logs")))
 @app.on_event("startup")
-def startup(): Base.metadata.create_all(engine); LOG_DIR.mkdir(parents=True,exist_ok=True)
+def startup():
+    Base.metadata.create_all(engine)
+    upgrade_schema()
+    LOG_DIR.mkdir(parents=True,exist_ok=True)
 @app.middleware("http")
 async def load_user(request,call_next):
     request.state.user=None
