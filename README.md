@@ -31,8 +31,9 @@ These credentials are created by `scripts/seed.py` and must not be used in produ
 
 ### Club browsing
 The fixture finder groups the supplied club directory into NIFL Premiership,
-NIFL Championship, NCL Premier and NIFL Women's. Clubs, stadium, competition and
-date filters share a sidebar, which collapses on mobile. League sections collapse
+NIFL Championship, NCL Premier and NIFL Women's. Club selection uses a sidebar,
+which collapses on mobile. Stadium and competition filters are small buttons above
+the fixtures; there is no date filter or per-day match count. League sections collapse
 to keep the picker compact; the selected club's league opens automatically. The
 48 directory clubs, including Limavady United in the Premiership, remain browsable without published fixtures. Existing fixture
 clubs outside this directory remain under Other clubs. Women's teams have
@@ -46,11 +47,23 @@ fixture date and kick-off in Europe/London. Competition links support season nam
 containing slashes, such as `2026/27`.
 
 ### Ticket selection and reservations
-Standard adult tickets default to £15 when creating a fixture. Glentoran and
-Linfield also receive their configured menus from `gateline/ticketing.py` during
-startup, demo seeding and fixture creation. Startup adds missing types and applies
-the configured prices without reseeding events, modifying inventory or changing
-prices recorded on issued tickets.
+Each club has a saved ticket menu in `club_pricing`. Administrators open **Club
+pricing** from Match control to set named ticket types, prices and adult-admission
+categories. Prices are explicitly entered; there is no generic £15 fallback or
+automatic Adult/Concession/Child menu. New fixtures use their home club’s saved
+menu. Saving prices updates upcoming home fixtures, while issued tickets retain
+their recorded amounts. Clubs can use Adult and Concession or their own named
+options, including Glentoran and Linfield’s bespoke menus.
+
+Startup imports genuinely configured existing menus and preserves their prices
+and extra types. The legacy universal demo menu (Adult £15, Concession £10, Child
+£5 with the original seed descriptions) is retired from sale rather than treated
+as a club’s pricing policy. Those class records and previously issued tickets
+remain intact. Clubs without known prices require configuration before ticket
+sales; fresh demo seeding only supplies the explicitly specified Glentoran and
+Linfield prices. Quantities start blank and supporters choose their tickets.
+Public ticket pages do not display remaining stock; server capacity checks and
+staff attendance statistics remain available.
 
 Supporters can reserve a mixture of ticket types in one booking. Each Under 11
 ticket requires at least one paid adult ticket in the same booking; no
@@ -69,6 +82,13 @@ server independently rejects expired or completed bookings. The normal hold is
 10 minutes, shortened if sales close earlier. The additive reservation selection
 column is upgraded automatically on startup; `migrations/002_reservation_ticket_selection.sql`
 is provided for operators who apply SQL migrations manually.
+
+New public ticket numbers start with a stable home-club identifier, such as
+`GLENTORAN-` or `LINFIELD-`, followed by a random suffix. Every directory club has
+a distinct prefix, including separate women’s teams; club aliases resolve to the
+same prefix. Legacy ticket numbers and QR tokens are unchanged. The additive
+`club_pricing`, `enabled` and `adult_admission` schema changes are applied at
+startup, with `migrations/003_club_pricing.sql` for manual migration workflows.
 
 ## Database and migrations
 The application creates a new schema on first start. Schema evolution lives in `migrations/`; for this initial baseline run the included SQL or the seed script. Set `DATABASE_URL=postgresql+psycopg://...` for PostgreSQL and install its driver.

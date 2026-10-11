@@ -32,6 +32,12 @@ class EventInventory(Base):
     __tablename__="event_inventory"; id:Mapped[int]=mapped_column(primary_key=True); event_id:Mapped[int]=mapped_column(ForeignKey("events.id")); section_id:Mapped[int]=mapped_column(ForeignKey("sections.id")); capacity:Mapped[int]; held:Mapped[int]=mapped_column(default=0); section:Mapped[Section]=relationship(); __table_args__=(UniqueConstraint("event_id","section_id"),)
 class TicketClass(Base):
     __tablename__="ticket_classes"; id:Mapped[int]=mapped_column(primary_key=True); event_id:Mapped[int]=mapped_column(ForeignKey("events.id")); name:Mapped[str]; description:Mapped[str]=mapped_column(default=""); price:Mapped[Decimal]=mapped_column(Numeric(10,2)); minimum:Mapped[int]=mapped_column(default=0); maximum:Mapped[int]=mapped_column(default=10)
+    enabled:Mapped[bool]=mapped_column(Boolean,default=True,server_default="1")
+    adult_admission:Mapped[bool|None]=mapped_column(Boolean,nullable=True)
+class ClubPricing(Base):
+    __tablename__="club_pricing"
+    club_name:Mapped[str]=mapped_column(String(150),primary_key=True)
+    menu_json:Mapped[str]=mapped_column(Text,default="[]")
 class PriorityIdentifier(Base):
     __tablename__="priority_identifiers"; id:Mapped[int]=mapped_column(primary_key=True); code:Mapped[str]=mapped_column(unique=True); maximum:Mapped[int]=mapped_column(default=1); used:Mapped[int]=mapped_column(default=0)
 class Voucher(Base):

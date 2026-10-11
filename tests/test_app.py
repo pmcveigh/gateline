@@ -68,6 +68,8 @@ def test_schema_upgrade_updates_an_existing_database(monkeypatch, tmp_path):
         )
         connection.execute(text("CREATE TABLE reservations (id INTEGER PRIMARY KEY)"))
         connection.execute(text("INSERT INTO reservations (id) VALUES (1)"))
+        connection.execute(text("CREATE TABLE ticket_classes (id INTEGER PRIMARY KEY, name VARCHAR, price NUMERIC)"))
+        connection.execute(text("INSERT INTO ticket_classes (id,name,price) VALUES (1,'Adult',19)"))
 
     monkeypatch.setattr(database, "engine", engine)
     database.upgrade_schema()
@@ -82,8 +84,10 @@ def test_schema_upgrade_updates_an_existing_database(monkeypatch, tmp_path):
             text("SELECT access_token FROM orders WHERE id = 1")
         )
         selection = connection.scalar(text("SELECT selection_json FROM reservations WHERE id = 1"))
+        old_class=connection.execute(text("SELECT name,price,enabled,adult_admission FROM ticket_classes WHERE id = 1")).one()
 
     assert event_columns["sales_suspended"]["nullable"] is False
     assert event_columns["archived"]["nullable"] is False
     assert token
     assert selection == "{}"
+    assert old_class == ("Adult",19,1,None)

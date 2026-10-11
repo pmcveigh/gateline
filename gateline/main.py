@@ -3,7 +3,7 @@ from io import BytesIO, StringIO
 from decimal import Decimal
 from pathlib import Path
 from typing import Annotated
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 import csv, json, os, qrcode, secrets
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
@@ -20,7 +20,7 @@ from .clubs import LEAGUES, build_club_groups, find_club
 from .database import Base, engine, get_db, upgrade_schema
 from .models import *
 from .services import checkout, reserve, reservation_rows, scan_ticket
-from .ticketing import configure_club_tickets, is_adult, minimum_adult_price, selected_classes, upgrade_club_tickets, VIP_MIN_AGE
+from .ticketing import canonical_club, club_key, configure_club_tickets, is_adult, menu_for_club, minimum_adult_price, offered_classes, save_club_pricing, selected_classes, upgrade_club_tickets, VIP_MIN_AGE
 
 app=FastAPI(title="Gateline",version=__version__)
 app.mount("/static",StaticFiles(directory="gateline/static"),name="static"); templates=Jinja2Templates(directory="gateline/templates")
@@ -53,12 +53,17 @@ async def log_session(request,call_next):
         with (LOG_DIR/f"{session_id}.log").open("a",encoding="utf-8") as log: log.write(json.dumps(entry)+"\n")
     return response
 app.add_middleware(SessionMiddleware,secret_key=__import__('os').getenv("SECRET_KEY",secrets.token_hex(32)),https_only=False,same_site="lax")
-def render(request,template_name,status_code=200,**ctx): return templates.TemplateResponse(request,template_name,{"user":request.state.user,"version":__version__,"quote":quote,"minimum_adult_price":minimum_adult_price,"local_time":local_time,**ctx},status_code=status_code)
+def render(request,template_name,status_code=200,**ctx): return templates.TemplateResponse(request,template_name,{"user":request.state.user,"version":__version__,"quote":quote,"minimum_adult_price":minimum_adult_price,"local_time":local_time,"filter_url":fixture_filter_url,"offered_classes":offered_classes,**ctx},status_code=status_code)
 
 OptionalVenueId=Annotated[int|None,BeforeValidator(lambda value: None if value=="" else value)]
 
 def utc_dt(value):
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+def fixture_filter_url(filters, **changes):
+    values={**filters,**changes}
+    query=urlencode({key:values[key] for key in ("club","venue","competition") if values.get(key) not in (None,"")})
+    return "/?"+query if query else "/"
 
 def local_time(value):
     return utc_dt(value).astimezone(ZoneInfo("Europe/London"))
@@ -73,7 +78,7 @@ def build_calendar(events):
     return calendar
 
 @app.get("/",response_class=HTMLResponse)
-def home(request:Request,club:str="",venue:OptionalVenueId=None,competition:str="",date:str="",db:Session=Depends(get_db)):
+def home(request:Request,club:str="",venue:OptionalVenueId=None,competition:str="",db:Session=Depends(get_db)):
     query=select(Event).options(selectinload(Event.classes)).where(Event.published==True,Event.cancelled==False,Event.starts_at>=datetime.now(timezone.utc))
     directory_club=find_club(club)
     if club:
@@ -82,12 +87,11 @@ def home(request:Request,club:str="",venue:OptionalVenueId=None,competition:str=
     if venue: query=query.where(Event.venue_id==venue)
     if competition: query=query.where(Event.competition==competition)
     events=db.scalars(query.order_by(Event.starts_at)).all()
-    if date: events=[event for event in events if local_time(event.starts_at).date().isoformat()==date]
     clubs=sorted({name for event in db.scalars(select(Event).where(Event.published==True)) for name in (event.home_team,event.away_team)})
     venues=db.scalars(select(Venue).join(Event).where(Event.published==True).distinct().order_by(Venue.name)).all()
     competitions=db.scalars(select(Event.competition).where(Event.published==True).distinct().order_by(Event.competition)).all()
     calendar=build_calendar(events)
-    return render(request,"home.html",events=events,calendar=calendar,club_groups=build_club_groups(clubs),venues=venues,competitions=competitions,filters={"club":directory_club.name if directory_club else club,"venue":venue,"competition":competition,"date":date})
+    return render(request,"home.html",events=events,calendar=calendar,club_groups=build_club_groups(clubs),venues=venues,competitions=competitions,filters={"club":directory_club.name if directory_club else club,"venue":venue,"competition":competition})
 @app.get("/clubs/{name}",response_class=HTMLResponse)
 def club_profile(name:str,request:Request,db:Session=Depends(get_db)):
     directory_club=find_club(name)
@@ -124,15 +128,16 @@ def render_event(request,db,event_id,selection=None,error=None,status_code=200):
         sold=db.scalar(select(func.count(Ticket.id)).where(Ticket.event_id==event.id,Ticket.section_id==inv.section_id,Ticket.status.in_(["sold","scanned"]))) or 0
         held=db.scalar(select(func.coalesce(func.sum(Reservation.quantity),0)).where(Reservation.event_id==event.id,Reservation.section_id==inv.section_id,Reservation.completed==False,Reservation.expires_at>now)) or 0
         availability[inv.section_id]=max(0,inv.capacity-inv.held-sold-held)
-    on_sale=not event.cancelled and not event.sales_suspended and utc_dt(event.sales_open)<=now<=utc_dt(event.sales_close)
-    return render(request,"event.html",status_code=status_code,event=event,availability=availability,on_sale=on_sale,selection=selection,error=error,is_adult=is_adult)
+    on_sale=bool(offered_classes(event)) and not event.cancelled and not event.sales_suspended and utc_dt(event.sales_open)<=now<=utc_dt(event.sales_close)
+    return render(request,"event.html",status_code=status_code,event=event,availability=availability,on_sale=on_sale,selection=selection,error=error,is_adult=is_adult,ticket_classes=offered_classes(event))
 @app.post("/events/{event_id}/reserve")
-def make_reservation(event_id:int,request:Request,section_id:int=Form(),quantity:int=Form(1),seat_ids:str=Form(""),class_ids:list[int]=Form([]),ticket_quantities:list[int]=Form([]),db:Session=Depends(get_db)):
+def make_reservation(event_id:int,request:Request,section_id:int=Form(),quantity:int=Form(0),seat_ids:str=Form(""),class_ids:list[int]=Form([]),ticket_quantities:list[str]=Form([]),db:Session=Depends(get_db)):
     selection=None
     try:
         if class_ids or ticket_quantities:
             if len(class_ids)!=len(ticket_quantities) or len(set(class_ids))!=len(class_ids): raise ValueError("Invalid ticket selection")
-            selection={class_id:count for class_id,count in zip(class_ids,ticket_quantities) if count!=0}
+            counts=[int(value) if value.strip() else 0 for value in ticket_quantities]
+            selection={class_id:count for class_id,count in zip(class_ids,counts) if count!=0}
             quantity=sum(selection.values())
         r=reserve(db,event_id,section_id,quantity,[int(x) for x in seat_ids.split(",") if x],selection)
     except ValueError as e: return render_event(request,db,event_id,selection,str(e),409)
@@ -148,15 +153,18 @@ def render_checkout(request,db,token,form=None,error=None,status_code=200):
     stored=json.loads(r.selection_json or "{}")
     selection=stored.get("classes",stored)
     form=form or {}
-    lines=selected_classes(event,selection,quantity) if selection else []
+    selection_invalid=False
+    try: lines=selected_classes(event,selection,quantity) if selection else []
+    except ValueError as unavailable:
+        lines=[];selection_invalid=True;error=error or str(unavailable)
     if not selection and form.get("class_id"):
         try: lines=selected_classes(event,{int(form['class_id']):quantity},quantity)
         except ValueError: pass
     vip_count=sum(count for tc,count in lines if tc.name=="VIP")
-    ticket_subtotal=sum((tc.price*count for tc,count in lines),Decimal("0")) if lines else (event.classes[0].price*quantity if event.classes else Decimal("0"))
+    ticket_subtotal=sum((tc.price*count for tc,count in lines),Decimal("0")) if lines else Decimal("0")
     now=datetime.now(timezone.utc)
-    expired=any(row.completed or utc_dt(row.expires_at)<=now for row in rows)
-    return render(request,"checkout.html",status_code=status_code,reservation=r,event=event,lines=lines,quantity=quantity,ticket_subtotal=ticket_subtotal,vip_count=vip_count,vip_min_age=VIP_MIN_AGE,selection=selection,form=form,error=error,expired=expired,expires_ms=int((now if expired else utc_dt(r.expires_at)).timestamp()*1000),server_now_ms=int(now.timestamp()*1000))
+    expired=selection_invalid or any(row.completed or utc_dt(row.expires_at)<=now for row in rows)
+    return render(request,"checkout.html",status_code=status_code,reservation=r,event=event,lines=lines,quantity=quantity,ticket_subtotal=ticket_subtotal,vip_count=vip_count,vip_min_age=VIP_MIN_AGE,selection=selection,form=form,error=error,vip_discount_allowed=club_key(event.home_team)==club_key("Glentoran"),expired=expired,expires_ms=int((now if expired else utc_dt(r.expires_at)).timestamp()*1000),server_now_ms=int(now.timestamp()*1000))
 @app.post("/checkout/{token}")
 def complete(token:str,request:Request,full_name:str=Form(),email:str=Form(),address1:str=Form(),address2:str=Form(""),city:str=Form(),postcode:str=Form(),country:str=Form(),class_id:int|None=Form(None),priority_code:str=Form(""),voucher_code:str=Form(""),test_result:str=Form("success"),vip_season_holder:bool=Form(False),vip_birth_dates:list[str]=Form([]),db:Session=Depends(get_db)):
     customer=dict(full_name=full_name,email=email,address1=address1,address2=address2,city=city,postcode=postcode,country=country)
@@ -193,18 +201,41 @@ def logout(request:Request):request.session.clear();return RedirectResponse("/",
 @app.get("/admin",response_class=HTMLResponse)
 def admin(request:Request,user=Depends(require("admin")),db:Session=Depends(get_db)):
     events=db.scalars(select(Event).order_by(Event.starts_at)).all(); return render(request,"admin.html",events=events,venues=db.scalars(select(Venue).order_by(Venue.name)).all())
+@app.get("/admin/clubs",response_class=HTMLResponse)
+def club_pricing_index(request:Request,user=Depends(require("admin")),db:Session=Depends(get_db)):
+    names={entry.name for clubs in LEAGUES.values() for entry in clubs}
+    names.update(db.scalars(select(Event.home_team).distinct()).all())
+    by_key={club_key(name):name for name in sorted(names,reverse=True)}
+    return render(request,"club_pricing_index.html",clubs=sorted(by_key.values()))
+
+@app.get("/admin/clubs/{name}/pricing",response_class=HTMLResponse)
+def club_pricing_page(name:str,request:Request,user=Depends(require("admin")),db:Session=Depends(get_db)):
+    return render(request,"club_pricing.html",name=name,menu=menu_for_club(db,name))
+
+@app.post("/admin/clubs/{name}/pricing",response_class=HTMLResponse)
+def update_club_pricing(name:str,request:Request,ticket_names:list[str]=Form([]),ticket_prices:list[str]=Form([]),ticket_descriptions:list[str]=Form([]),ticket_categories:list[str]=Form([]),user=Depends(require("admin")),db:Session=Depends(get_db)):
+    try:
+        save_club_pricing(db,name,ticket_names,ticket_prices,ticket_descriptions,ticket_categories)
+    except ValueError as error:
+        menu=[{"name":title,"price":price,"description":description,"adult":category=="adult"} for title,price,description,category in zip(ticket_names,ticket_prices,ticket_descriptions,ticket_categories)]
+        return render(request,"club_pricing.html",status_code=400,name=name,menu=menu,error=str(error))
+    db.add(AuditLog(user_id=user.id,action="club.pricing_updated",entity="club",entity_id=club_key(name)));db.commit()
+    return RedirectResponse(f"/admin/clubs/{quote(name,safe='')}/pricing?saved=1",303)
+
 @app.get("/admin/events/new",response_class=HTMLResponse)
 def new_event(request:Request,user=Depends(require("admin")),db:Session=Depends(get_db)):
     return render(request,"event_admin.html",event=None,venues=db.scalars(select(Venue).order_by(Venue.name)).all())
 @app.post("/admin/events")
-def create_event(request:Request,title:str=Form(),home_team:str=Form(),away_team:str=Form(),competition:str=Form(),venue_id:int=Form(),starts_at:datetime=Form(),sales_open:datetime=Form(),sales_close:datetime=Form(),adult_price:Decimal=Form(Decimal("15")),user=Depends(require("admin")),db:Session=Depends(get_db)):
+def create_event(request:Request,title:str=Form(),home_team:str=Form(),away_team:str=Form(),competition:str=Form(),venue_id:int=Form(),starts_at:datetime=Form(),sales_open:datetime=Form(),sales_close:datetime=Form(),user=Depends(require("admin")),db:Session=Depends(get_db)):
     venue=db.get(Venue,venue_id)
-    if not venue or sales_open>=sales_close or sales_close>starts_at or adult_price<0: raise HTTPException(422,"Check venue, dates and price")
+    if not venue or sales_open>=sales_close or sales_close>starts_at: raise HTTPException(422,"Check venue and dates")
     london=ZoneInfo("Europe/London"); to_utc=lambda value:(value.replace(tzinfo=london) if value.tzinfo is None else value).astimezone(timezone.utc)
-    event=Event(title=title.strip(),home_team=home_team.strip(),away_team=away_team.strip(),competition=competition.strip(),venue_id=venue_id,starts_at=to_utc(starts_at),sales_open=to_utc(sales_open),sales_close=to_utc(sales_close),published=False);db.add(event);db.flush()
+    home_entry=canonical_club(home_team);away_entry=canonical_club(away_team)
+    home_team=home_entry.name if home_entry else home_team.strip();away_team=away_entry.name if away_entry else away_team.strip()
+    if not home_team or len(home_team)>150 or not away_team or len(away_team)>150: raise HTTPException(422,"Enter valid club names")
+    event=Event(title=title.strip(),home_team=home_team,away_team=away_team,competition=competition.strip(),venue_id=venue_id,starts_at=to_utc(starts_at),sales_open=to_utc(sales_open),sales_close=to_utc(sales_close),published=False);db.add(event);db.flush()
     for stand in venue.stands:
         for section in stand.sections: db.add(EventInventory(event_id=event.id,section_id=section.id,capacity=section.capacity))
-    db.add(TicketClass(event_id=event.id,name="Adult",description="Standard admission",price=adult_price,minimum=0,maximum=10));db.flush()
     configure_club_tickets(db,event)
     db.add(AuditLog(user_id=user.id,action="event.created",entity="event",entity_id=str(event.id)));db.commit();return RedirectResponse(f"/admin/events/{event.id}",303)
 @app.get("/admin/events/{event_id}",response_class=HTMLResponse)
@@ -217,7 +248,7 @@ def event_state(event_id:int,request:Request,action:str=Form(),reason:str=Form("
     event=db.get(Event,event_id)
     if not event: raise HTTPException(404)
     if action=="publish":
-        if not event.inventories or not event.classes: raise HTTPException(409,"Configure inventory and ticket classes before publishing")
+        if not event.inventories or not offered_classes(event): raise HTTPException(409,"Configure inventory and ticket classes before publishing")
         event.published=True
     elif action=="unpublish": event.published=False
     elif action=="suspend": event.sales_suspended=True
@@ -228,7 +259,10 @@ def event_state(event_id:int,request:Request,action:str=Form(),reason:str=Form("
     db.add(AuditLog(user_id=user.id,action=f"event.{action}:{reason[:200]}",entity="event",entity_id=str(event.id)));db.commit();return RedirectResponse(f"/admin/events/{event.id}",303)
 @app.post("/admin/events/{event_id}/publish")
 def publish(event_id:int,request:Request,user=Depends(require("admin")),db:Session=Depends(get_db)):
-    e=db.get(Event,event_id);e.published=not e.published;db.add(AuditLog(user_id=user.id,action="event.published" if e.published else "event.unpublished",entity="event",entity_id=str(e.id)));db.commit();return RedirectResponse("/admin",303)
+    e=db.get(Event,event_id)
+    if not e: raise HTTPException(404)
+    if not e.published and (not e.inventories or not offered_classes(e)): raise HTTPException(409,"Configure inventory and club pricing before publishing")
+    e.published=not e.published;db.add(AuditLog(user_id=user.id,action="event.published" if e.published else "event.unpublished",entity="event",entity_id=str(e.id)));db.commit();return RedirectResponse("/admin",303)
 @app.get("/admin/events/{event_id}/attendance",response_class=HTMLResponse)
 def attendance(event_id:int,request:Request,user=Depends(require("admin")),db:Session=Depends(get_db)):
     event=db.get(Event,event_id)

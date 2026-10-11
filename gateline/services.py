@@ -4,7 +4,7 @@ import json, secrets
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 from .models import *
-from .ticketing import is_adult, selected_classes, validate_vip_ages
+from .ticketing import club_key, is_adult, selected_classes, ticket_prefix, validate_vip_ages
 
 def utc(value: datetime) -> datetime:
     """Return a comparable UTC datetime (SQLite drops timezone metadata)."""
@@ -35,7 +35,7 @@ def reserve(db:Session,event_id:int,section_id:int,quantity:int,seat_ids:list[in
     else:
         sold=db.scalar(select(func.count(Ticket.id)).where(Ticket.event_id==event_id,Ticket.section_id==section_id,Ticket.status.in_(["sold","scanned"]))) or 0
         held=db.scalar(select(func.coalesce(func.sum(Reservation.quantity),0)).where(Reservation.event_id==event_id,Reservation.section_id==section_id,Reservation.completed==False,Reservation.expires_at>now)) or 0
-        if sold+held+quantity > inv.capacity-inv.held: raise ValueError("Not enough tickets remain")
+        if sold+held+quantity > inv.capacity-inv.held: raise ValueError("Your selected tickets are unavailable. Please change your selection.")
     token=secrets.token_urlsafe(20); expiry=min(now+timedelta(minutes=10),utc(event.sales_close))
     # One reservation row per assigned seat preserves the database uniqueness guard.
     rows=[]
@@ -72,7 +72,7 @@ def checkout(db:Session, reservation_token:str, class_id:int|None, customer_data
     if any(not str(customer_data.get(key,"")).strip() for key in required) or "@" not in customer_data.get("email",""): raise ValueError("Enter a valid name, email and postal address")
     vip_qty=sum(count for tc,count in lines if tc.name=="VIP")
     priority_qty=qty if event.priority_until and now<utc(event.priority_until) else 0
-    discounted_vip=vip_qty if vip_season_holder and event.home_team=="Glentoran" else 0
+    discounted_vip=vip_qty if vip_season_holder and club_key(event.home_team)==club_key("Glentoran") else 0
     entitlement=max(priority_qty,discounted_vip)
     priority=None
     if entitlement:
@@ -106,7 +106,7 @@ def checkout(db:Session, reservation_token:str, class_id:int|None, customer_data
         for r in reservations:
             for _ in range(r.quantity):
                 tc,_=units[index]; net=ticket_prices[index]; index+=1
-                db.add(Ticket(public_id="TKT-"+secrets.token_hex(4).upper(),qr_token=secrets.token_urlsafe(32),order_id=order.id,event_id=event.id,section_id=r.section_id,seat_id=r.seat_id,ticket_class_id=tc.id,price=net,status="sold"))
+                db.add(Ticket(public_id=ticket_prefix(event.home_team)+"-"+secrets.token_hex(6).upper(),qr_token=secrets.token_urlsafe(32),order_id=order.id,event_id=event.id,section_id=r.section_id,seat_id=r.seat_id,ticket_class_id=tc.id,price=net,status="sold"))
         if voucher_code: db.scalar(select(Voucher).where(func.upper(Voucher.code)==voucher_code.upper())).uses+=1
     db.commit(); db.refresh(order); return order
 

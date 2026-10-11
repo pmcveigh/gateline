@@ -61,6 +61,13 @@ def upgrade_schema():
             if "selection_json" not in columns:
                 connection.execute(text("ALTER TABLE reservations ADD COLUMN selection_json TEXT NOT NULL DEFAULT '{}'"))
 
+        if inspect(connection).has_table("ticket_classes"):
+            columns = {column["name"] for column in inspect(connection).get_columns("ticket_classes")}
+            if "enabled" not in columns:
+                connection.execute(text("ALTER TABLE ticket_classes ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT TRUE"))
+            if "adult_admission" not in columns:
+                connection.execute(text("ALTER TABLE ticket_classes ADD COLUMN adult_admission BOOLEAN"))
+
 def get_db():
     with SessionLocal() as db:
         yield db
