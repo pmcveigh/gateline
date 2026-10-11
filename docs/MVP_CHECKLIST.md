@@ -17,3 +17,14 @@ Inspected branch `work` at `fde4f93e0a26c0ce96a59cbfc219ee3e50f08d67` on 2026-10
 | Production migration/concurrency | Partial | n/a | SQL migration; SQLite atomic scan | SQLite checked; PostgreSQL and legacy reservation-table rebuild not exercised |
 
 Camera launch is not proven by automated decoding. Physical Chrome/Safari/Firefox and phone hardware checks remain required. BarcodeDetector support varies; unsupported browsers receive a manual/wedge fallback rather than a false success claim.
+
+## Supporter portal addition
+
+Supporter registration, authentication, personal dashboards, club preferences,
+age-based eligibility, disability concessions and consent-based admin reporting
+are covered by route/business tests. Phil's specified test account and Glentoran
+season record are created idempotently. Season passes and personally assigned
+match tickets share a per-supporter/per-fixture admission guard. Password recovery,
+email verification, season-ticket renewal/admin editing and physical proof of age
+or disability are outside this demo portal; eligibility uses declared profile and
+guest details. Season-pass admissions are separate from ticket-stock allocation.

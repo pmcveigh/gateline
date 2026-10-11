@@ -7,7 +7,7 @@ import hashlib, json, re, unicodedata
 from datetime import datetime
 from .clubs import LEAGUES
 from sqlalchemy import func, select
-from .models import ClubPricing, Event, TicketClass
+from .models import AuditLog, ClubPricing, Event, TicketClass
 
 
 CLUB_TICKETS = {
@@ -92,66 +92,72 @@ def is_generic_seed_menu(classes):
 
 def menu_for_club(db, name):
     pricing=db.get(ClubPricing,club_key(name))
-    return json.loads(pricing.menu_json) if pricing else []
+    return initialise_club_pricing(db,name)
 
 
 def initialise_club_pricing(db, name):
     key=club_key(name)
     pricing=db.get(ClubPricing,key)
-    if pricing: return json.loads(pricing.menu_json)
+    defaults={"Adult":{"name":"Adult","price":"15","description":"Adult admission","adult":True},"Concession":{"name":"Concession","price":"8","description":"Under 16, over 65 or disability concession","adult":False}}
+    if pricing:
+        menu=json.loads(pricing.menu_json)
+        if not pricing.portal_defaults_applied:
+            edited=db.scalar(select(AuditLog.id).where(AuditLog.action=="club.pricing_updated",AuditLog.entity_id==key))
+            if not edited:
+                existing={item["name"] for item in menu}
+                menu.extend(item for title,item in defaults.items() if title not in existing)
+            pricing.menu_json=json.dumps(menu);pricing.portal_defaults_applied=True
+        return menu
     entry=canonical_club(name)
     aliases=entry.filter_names if entry else (name.strip(),)
     events=db.scalars(select(Event).where(func.lower(Event.home_team).in_([alias.casefold() for alias in aliases])).order_by(Event.starts_at.desc(),Event.id.desc())).all()
     source=next((event for event in events if offered_classes(event)),None)
     bespoke=next((types for club,types in CLUB_TICKETS.items() if club_key(club)==key),())
-    menu={}
+    menu=dict(defaults)
     for title,price,description in bespoke:
         menu[title]={"name":title,"price":price,"description":description,"adult":title in ADULT_NAMES}
     if source and not is_generic_seed_menu(offered_classes(source)):
         for tc in source.classes:
-            if not tc.enabled or (bespoke and legacy_generic(tc)): continue
+            if not tc.enabled or (has_seed_defaults(source.classes) and legacy_generic(tc)): continue
             # Preserve genuinely configured prices and extra club-specific types.
             if bespoke and has_seed_defaults(source.classes) and (tc.name,tc.description,tc.price)==("Concession","Eligible concessions",Decimal("10")): continue
-            menu[tc.name]={"name":tc.name,"price":str(tc.price),"description":tc.description,"adult":is_adult(tc)}
+            menu[tc.name]={"name":tc.name,"price":str(tc.price),"description":tc.description,"adult":is_adult(tc),"concession_under":tc.concession_under,"concession_over":tc.concession_over}
     values=list(menu.values())
-    db.add(ClubPricing(club_name=key,menu_json=json.dumps(values)));db.flush()
+    db.add(ClubPricing(club_name=key,menu_json=json.dumps(values),portal_defaults_applied=True));db.flush()
     return values
 
 
 def configure_club_tickets(db, event):
-    """Use only this home club's explicitly configured menu; never invent prices."""
+    """Start with club defaults, then respect the club's saved menu."""
     menu=initialise_club_pricing(db,event.home_team)
     existing={tc.name:tc for tc in event.classes}
     seeded=has_seed_defaults(existing.values())
     for entry in menu:
         if entry["name"] not in existing:
-            db.add(TicketClass(event_id=event.id,name=entry["name"],price=Decimal(entry["price"]),description=entry["description"],adult_admission=entry["adult"],minimum=0,maximum=10))
-        elif existing[entry["name"]].adult_admission is None:
-            existing[entry["name"]].adult_admission=entry["adult"]
-    if any(club_key(club)==club_key(event.home_team) for club in CLUB_TICKETS):
-        for tc in existing.values():
-            if legacy_generic(tc) and tc.name not in {entry["name"] for entry in menu}: tc.enabled=False
-            elif seeded and (tc.name,tc.description,tc.price)==("Concession","Eligible concessions",Decimal("10")):
-                tc.price=next(Decimal(entry["price"]) for entry in menu if entry["name"]=="Concession") if any(entry["name"]=="Concession" for entry in menu) else tc.price
+            db.add(TicketClass(event_id=event.id,name=entry["name"],price=Decimal(entry["price"]),description=entry["description"],adult_admission=entry["adult"],concession_under=entry.get("concession_under",16),concession_over=entry.get("concession_over",65),minimum=0,maximum=10))
+        else:
+            tc=existing[entry["name"]];tc.enabled=True
+            if tc.adult_admission is None: tc.adult_admission=entry["adult"]
+            if seeded: tc.price=Decimal(entry["price"])
+    for tc in existing.values():
+        if legacy_generic(tc) and tc.name not in {entry["name"] for entry in menu}: tc.enabled=False
     db.flush();db.expire(event,["classes"])
 
 
 def upgrade_club_tickets(db):
+    for clubs in LEAGUES.values():
+        for club in clubs: initialise_club_pricing(db,club.name)
     for event in db.scalars(select(Event).order_by(Event.starts_at.desc(),Event.id.desc())).all():
-        # Only add missing menu types to the bespoke clubs during migration;
-        # other fixtures keep their existing individual price records.
-        menu=initialise_club_pricing(db,event.home_team)
-        if not menu and is_generic_seed_menu(offered_classes(event)):
-            for tc in event.classes: tc.enabled=False
-        if any(club_key(club)==club_key(event.home_team) for club in CLUB_TICKETS): configure_club_tickets(db,event)
+        configure_club_tickets(db,event)
     db.commit()
 
 
-def save_club_pricing(db, name, names, prices, descriptions, categories):
+def save_club_pricing(db, name, names, prices, descriptions, categories, concession_under=None, concession_over=None):
     if not (len(names)==len(prices)==len(descriptions)==len(categories)):
         raise ValueError("Check each ticket type and price")
     menu=[];seen=set()
-    for title,raw_price,description,category in zip(names,prices,descriptions,categories):
+    if concession_under is not None and (len(concession_under)!=len(names) or len(concession_over or [])!=len(names)): raise ValueError("Check concession age limits")
+    for index,(title,raw_price,description,category) in enumerate(zip(names,prices,descriptions,categories)):
         title=title.strip();raw_price=raw_price.strip()
         title={"adult":"Adult","concession":"Concession","child":"Child","under 11":"Under 11","vip":"VIP"}.get(title.casefold(),title)
         if not title and not raw_price and not description.strip(): continue
@@ -162,12 +168,15 @@ def save_club_pricing(db, name, names, prices, descriptions, categories):
         if not price.is_finite() or price<0 or price>Decimal("999999.99") or price.quantize(Decimal("0.01"))!=price:
             raise ValueError("Prices must be non-negative amounts with at most two decimal places")
         seen.add(title.casefold())
-        menu.append({"name":title,"price":str(price),"description":description.strip(),"adult":title=="VIP" or (category=="adult" and title not in ("Concession","Child","Under 11"))})
+        try: under=int(concession_under[index] or 16) if concession_under is not None else 16;over=int(concession_over[index] or 65) if concession_over is not None else 65
+        except ValueError: raise ValueError("Enter whole numbers for concession ages")
+        if not 0<=under<=over<=120: raise ValueError("Concession ages must be between 0 and 120, with the lower limit first")
+        menu.append({"name":title,"price":str(price),"description":description.strip(),"adult":title=="VIP" or (category=="adult" and title not in ("Concession","Child","Under 11")),"concession_under":under,"concession_over":over})
     key=club_key(name)
     if not key or len(key)>150: raise ValueError("Enter a club name of at most 150 characters")
     pricing=db.get(ClubPricing,key)
-    if pricing: pricing.menu_json=json.dumps(menu)
-    else: db.add(ClubPricing(club_name=key,menu_json=json.dumps(menu)))
+    if pricing: pricing.menu_json=json.dumps(menu);pricing.portal_defaults_applied=True
+    else: db.add(ClubPricing(club_name=key,menu_json=json.dumps(menu),portal_defaults_applied=True))
     # Keep class IDs and past tickets, while making the current club menu available
     # on future fixtures. Removed types remain as historical records.
     now=datetime.now(timezone.utc)
@@ -178,9 +187,9 @@ def save_club_pricing(db, name, names, prices, descriptions, categories):
         for entry in menu:
             tc=existing.get(entry["name"])
             if tc:
-                tc.price=Decimal(entry["price"]);tc.description=entry["description"];tc.adult_admission=entry["adult"]
+                tc.price=Decimal(entry["price"]);tc.description=entry["description"];tc.adult_admission=entry["adult"];tc.concession_under=entry["concession_under"];tc.concession_over=entry["concession_over"]
             else:
-                db.add(TicketClass(event_id=event.id,name=entry["name"],price=Decimal(entry["price"]),description=entry["description"],adult_admission=entry["adult"]))
+                db.add(TicketClass(event_id=event.id,name=entry["name"],price=Decimal(entry["price"]),description=entry["description"],adult_admission=entry["adult"],concession_under=entry["concession_under"],concession_over=entry["concession_over"]))
         db.flush();db.expire(event,["classes"])
     db.commit()
 

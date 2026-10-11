@@ -71,7 +71,7 @@ def test_under_11_requires_a_paid_adult_and_issues_mixed_tickets(booking, club, 
     adult="Grandstand Lower" if club=="Glentoran" else "General Admission"
     selection = {classes[adult]: 1, classes["Under 11"]: 2}
     r = reserve(db, event.id, section.id, 3, [], selection)
-    order = checkout(db, r.token, None, customer())
+    order = checkout(db, r.token, None, customer(), attendee_birth_dates=["", "2018-01-01", "2018-01-01"])
     assert order.total == Decimal("15") + 2 * Decimal(child_price)
     assert sorted(t.price for t in order.tickets) == [Decimal(child_price), Decimal(child_price), Decimal("15")]
     assert sorted(t.ticket_class.name for t in order.tickets) == [adult, "Under 11", "Under 11"]
@@ -152,7 +152,7 @@ def test_mixed_assigned_seats_and_child_tokens_cannot_split_a_booking(booking):
     db.add_all(seats); db.commit()
     r = reserve(db, event.id, section.id, 2, [s.id for s in seats], {classes["Adult"]: 1, classes["Under 11"]: 1})
     assert reservation_rows(db, r.token + "-1") == []
-    order = checkout(db, r.token, None, customer())
+    order = checkout(db, r.token, None, customer(), attendee_birth_dates=["", "2018-01-01"])
     assert len(order.tickets) == 2
     assert {t.seat_id for t in order.tickets} == {s.id for s in seats}
     assert order.total == Decimal("16")
@@ -164,13 +164,13 @@ def test_mixed_discount_rounding_matches_order_total_and_free_adult_is_rejected(
     voucher = Voucher(code="SAVE", kind="percentage", value=13, starts_at=now-timedelta(hours=1), expires_at=now+timedelta(hours=1), maximum_uses=2, enabled=True)
     db.add(voucher); db.commit()
     r = reserve(db, event.id, section.id, 4, [], {classes["Adult"]: 1, classes["Under 11"]: 3})
-    order = checkout(db, r.token, None, customer(), voucher_code="SAVE")
+    order = checkout(db, r.token, None, customer(), voucher_code="SAVE", attendee_birth_dates=["", "2018-01-01", "2018-01-01", "2018-01-01"])
     assert order.total == Decimal("15.66")
     assert sum(t.price for t in order.tickets) == order.total
     voucher.value = 100; db.commit()
     fresh = reserve(db, event.id, section.id, 2, [], {classes["Adult"]: 1, classes["Under 11"]: 1})
     with pytest.raises(ValueError, match="paying adult"):
-        checkout(db, fresh.token, None, customer(), voucher_code="SAVE")
+        checkout(db, fresh.token, None, customer(), voucher_code="SAVE", attendee_birth_dates=["", "2018-01-01"])
 
 
 def test_rounding_cannot_make_accompanying_adult_free(booking):
@@ -180,7 +180,7 @@ def test_rounding_cannot_make_accompanying_adult_free(booking):
     db.add(Voucher(code="SAVE",kind="fixed",value=Decimal("1"),starts_at=now-timedelta(hours=1),expires_at=now+timedelta(hours=1),maximum_uses=1,enabled=True));db.commit()
     r=reserve(db,event.id,section.id,2,[],{classes["Adult"]:1,classes["Under 11"]:1})
     with pytest.raises(ValueError,match="paying adult"):
-        checkout(db,r.token,None,customer(),voucher_code="SAVE")
+        checkout(db,r.token,None,customer(),voucher_code="SAVE",attendee_birth_dates=["", "2018-01-01"])
     assert db.scalar(select(Order)) is None
 
 
@@ -232,11 +232,11 @@ def test_saved_prices_and_custom_types_survive_restart_and_new_fixtures(booking)
     assert "Terrace Premium" not in {tc.name for tc in offered_classes(linfield)}
 
 
-def test_unknown_club_does_not_receive_another_clubs_or_generic_prices(booking):
+def test_new_club_receives_editable_adult_and_concession_defaults(booking):
     db,event,section,_=booking
     unknown=club_fixture(db,event,section,"Unconfigured Club")
-    assert offered_classes(unknown)==[]
-    assert minimum_adult_price(unknown) is None
+    assert {tc.name:tc.price for tc in offered_classes(unknown)}=={"Adult":Decimal("15"),"Concession":Decimal("8")}
+    assert minimum_adult_price(unknown)==Decimal("15")
 
 
 def test_removed_types_cannot_be_selected_but_issued_tickets_are_preserved(booking):
@@ -257,15 +257,15 @@ def test_club_price_is_explicit_and_validated(booking,price):
     assert menu_for_club(db,"Glentoran")==before
 
 
-def test_legacy_generic_seed_menu_is_retired_without_deleting_classes(booking):
+def test_legacy_seed_menu_uses_new_defaults_without_deleting_classes(booking):
     db,original,section,_=booking
     event=Event(title="Other v Visitors",home_team="Other Club",away_team="Visitors",competition=original.competition,venue_id=original.venue_id,starts_at=original.starts_at,sales_open=original.sales_open,sales_close=original.sales_close,published=True)
     db.add(event);db.flush()
     for title,price,description in (("Adult","15","Standard admission"),("Concession","10","Eligible concessions"),("Child","5","Under 16")):
         db.add(TicketClass(event_id=event.id,name=title,price=Decimal(price),description=description))
     db.commit();upgrade_club_tickets(db);upgrade_club_tickets(db)
-    assert menu_for_club(db,"Other Club")==[]
-    assert offered_classes(event)==[]
+    assert {item["name"]:Decimal(item["price"]) for item in menu_for_club(db,"Other Club")}=={"Adult":Decimal("15"),"Concession":Decimal("8")}
+    assert {tc.name:tc.price for tc in offered_classes(event)}=={"Adult":Decimal("15"),"Concession":Decimal("8")}
     assert len(event.classes)==3
 
 

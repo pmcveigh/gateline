@@ -146,7 +146,7 @@ def test_match_cards_use_minimum_adult_price_and_profiles_include_dates(client):
         assert "Adult tickets from £1.00" not in response.text
         if path!="/":
             assert 'class="match-date"' in response.text
-            assert (datetime.now(timezone.utc)+timedelta(days=1)).strftime("%d %b %Y") in response.text
+            assert __import__("gateline.main",fromlist=["local_time"]).local_time(datetime.now(timezone.utc)+timedelta(days=1)).strftime("%d %b %Y") in response.text
 
 
 def test_mixed_ticket_reservation_post_and_checkout_keep_prices_and_expiry(client):
@@ -166,7 +166,7 @@ def test_mixed_ticket_reservation_post_and_checkout_keep_prices_and_expiry(clien
     assert "£15.00" in first.text and "£1.00" in first.text
     expiry=lambda html: re.search(r'data-expires="(\d+)"',html).group(1)
     assert expiry(first.text)==expiry(second.text)
-    response=client.post(location,data={"full_name":"Test Fan","email":"fan@example.com","address1":"1 Road","city":"Belfast","postcode":"BT1","country":"UK"})
+    response=client.post(location,data={"full_name":"Test Fan","email":"fan@example.com","address1":"1 Road","city":"Belfast","postcode":"BT1","country":"UK","attendee_birth_dates":["", "2018-01-01"]})
     assert response.status_code==200 and "Total £16.00" in response.text
 
 
@@ -200,11 +200,11 @@ def test_club_pricing_is_restricted_to_administrators(client):
     assert client.post("/admin/clubs/Glentoran/pricing").status_code==403
 
 
-def test_configured_club_prices_apply_to_new_fixtures_without_generic_defaults(client):
+def test_club_prices_override_initial_defaults_on_new_fixtures(client):
     client.post("/login",data={"email":"admin@test.test","password":"Test123!"})
     editor=client.get("/admin/clubs/Ballyclare%20Comrades/pricing")
     assert editor.status_code==200
-    assert 'name="ticket_prices" type="number" value="15"' not in editor.text
+    assert 'name="ticket_prices" type="number" value="15"' in editor.text
     saved=client.post("/admin/clubs/Ballyclare%20Comrades/pricing",data={"ticket_names":["Adult","Concession"],"ticket_prices":["21","9.50"],"ticket_descriptions":["Home admission","Eligible concessions"],"ticket_categories":["adult","other"]},follow_redirects=False)
     assert saved.status_code==303
     now=datetime.now(timezone.utc)
@@ -219,5 +219,9 @@ def test_configured_club_prices_apply_to_new_fixtures_without_generic_defaults(c
     payload.update(home_team="New Unconfigured Club",title="New Club v Glentoran")
     empty=client.post("/admin/events",data=payload,follow_redirects=False)
     empty_id=empty.headers["location"].split("/")[-1]
-    assert client.post(f"/admin/events/{empty_id}/state",data={"action":"publish"}).status_code==409
+    assert client.post(f"/admin/events/{empty_id}/state",data={"action":"publish"},follow_redirects=False).status_code==303
+    public=client.get(f"/events/{empty_id}")
+    assert "£15.00" in public.text and "£8.00" in public.text
+    assert client.post(f"/admin/events/{empty_id}/publish",follow_redirects=False).status_code==303
+    client.post("/admin/clubs/New%20Unconfigured%20Club/pricing",data={})
     assert client.post(f"/admin/events/{empty_id}/publish").status_code==409
