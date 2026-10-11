@@ -1,19 +1,61 @@
 from __future__ import annotations
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from enum import Enum
 import secrets
-from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
 
 def now(): return datetime.now(timezone.utc)
-class Role(str, Enum): ADMIN="admin"; GATE="gate"
+class Role(str, Enum): ADMIN="admin"; GATE="gate"; SUPPORTER="supporter"
 class Mode(str, Enum): ASSIGNED="assigned"; GENERAL="general"
 class TicketStatus(str, Enum): RESERVED="reserved"; SOLD="sold"; SCANNED="scanned"; CANCELLED="cancelled"; REFUNDED="refunded"; EXPIRED="expired"
 
 class User(Base):
     __tablename__="users"; id:Mapped[int]=mapped_column(primary_key=True); email:Mapped[str]=mapped_column(String(200),unique=True); name:Mapped[str]=mapped_column(String(120)); password_hash:Mapped[str]=mapped_column(String(255)); role:Mapped[str]=mapped_column(String(20)); gate:Mapped[str|None]=mapped_column(String(100),nullable=True)
+    username:Mapped[str|None]=mapped_column(String(30),nullable=True,unique=True)
+class SupporterProfile(Base):
+    __tablename__="supporter_profiles"
+    user_id:Mapped[int]=mapped_column(ForeignKey("users.id"),primary_key=True)
+    birth_date:Mapped[date|None]=mapped_column(Date,nullable=True)
+    clubs_json:Mapped[str]=mapped_column(Text,default="[]")
+    force_concession:Mapped[bool]=mapped_column(Boolean,default=False)
+    disability_type:Mapped[str]=mapped_column(Text,default="")
+    access_details:Mapped[str]=mapped_column(Text,default="")
+    share_access_needs:Mapped[bool]=mapped_column(Boolean,default=False)
+    address1:Mapped[str]=mapped_column(default="")
+    address2:Mapped[str]=mapped_column(default="")
+    city:Mapped[str]=mapped_column(default="")
+    postcode:Mapped[str]=mapped_column(default="")
+    country:Mapped[str]=mapped_column(default="United Kingdom")
+class SeasonTicket(Base):
+    __tablename__="season_tickets"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    club_name:Mapped[str]=mapped_column(String(150))
+    number:Mapped[str]=mapped_column(String(100))
+    user_id:Mapped[int]=mapped_column(ForeignKey("users.id"))
+    full_name:Mapped[str]=mapped_column(String(120))
+    email:Mapped[str]=mapped_column(String(200))
+    section:Mapped[str]=mapped_column(String(100))
+    ticket_type:Mapped[str]=mapped_column(String(100))
+    competition:Mapped[str]=mapped_column(default="NIFL Premiership")
+    valid_from:Mapped[date]=mapped_column(Date)
+    valid_until:Mapped[date]=mapped_column(Date)
+    active:Mapped[bool]=mapped_column(Boolean,default=True)
+    qr_token:Mapped[str]=mapped_column(unique=True,default=lambda:secrets.token_urlsafe(32))
+    user:Mapped[User]=relationship()
+    __table_args__=(UniqueConstraint("club_name","number"),)
+class SupporterAttendance(Base):
+    __tablename__="supporter_attendances"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    user_id:Mapped[int]=mapped_column(ForeignKey("users.id"))
+    season_ticket_id:Mapped[int|None]=mapped_column(ForeignKey("season_tickets.id"),nullable=True)
+    ticket_id:Mapped[int|None]=mapped_column(ForeignKey("tickets.id"),nullable=True)
+    event_id:Mapped[int]=mapped_column(ForeignKey("events.id"))
+    scanned_at:Mapped[datetime]=mapped_column(default=now)
+    operator_id:Mapped[int]=mapped_column(ForeignKey("users.id"))
+    __table_args__=(UniqueConstraint("user_id","event_id"),)
 class Club(Base):
     __tablename__="clubs"; id:Mapped[int]=mapped_column(primary_key=True); name:Mapped[str]=mapped_column(String(150)); short_name:Mapped[str]=mapped_column(String(30)); logo_url:Mapped[str|None]=mapped_column(nullable=True); primary_colour:Mapped[str]=mapped_column(default="#0b6b3a"); contact_email:Mapped[str]=mapped_column(String(200)); address:Mapped[str]=mapped_column(Text); currency:Mapped[str]=mapped_column(default="GBP")
 class Venue(Base):
@@ -34,10 +76,13 @@ class TicketClass(Base):
     __tablename__="ticket_classes"; id:Mapped[int]=mapped_column(primary_key=True); event_id:Mapped[int]=mapped_column(ForeignKey("events.id")); name:Mapped[str]; description:Mapped[str]=mapped_column(default=""); price:Mapped[Decimal]=mapped_column(Numeric(10,2)); minimum:Mapped[int]=mapped_column(default=0); maximum:Mapped[int]=mapped_column(default=10)
     enabled:Mapped[bool]=mapped_column(Boolean,default=True,server_default="1")
     adult_admission:Mapped[bool|None]=mapped_column(Boolean,nullable=True)
+    concession_under:Mapped[int]=mapped_column(default=16,server_default="16")
+    concession_over:Mapped[int]=mapped_column(default=65,server_default="65")
 class ClubPricing(Base):
     __tablename__="club_pricing"
     club_name:Mapped[str]=mapped_column(String(150),primary_key=True)
     menu_json:Mapped[str]=mapped_column(Text,default="[]")
+    portal_defaults_applied:Mapped[bool]=mapped_column(Boolean,default=False,server_default="0")
 class PriorityIdentifier(Base):
     __tablename__="priority_identifiers"; id:Mapped[int]=mapped_column(primary_key=True); code:Mapped[str]=mapped_column(unique=True); maximum:Mapped[int]=mapped_column(default=1); used:Mapped[int]=mapped_column(default=0)
 class Voucher(Base):
@@ -46,12 +91,15 @@ class Customer(Base):
     __tablename__="customers"; id:Mapped[int]=mapped_column(primary_key=True); full_name:Mapped[str]; email:Mapped[str]; address1:Mapped[str]; address2:Mapped[str]=mapped_column(default=""); city:Mapped[str]; postcode:Mapped[str]; country:Mapped[str]
 class Order(Base):
     __tablename__="orders"; id:Mapped[int]=mapped_column(primary_key=True); reference:Mapped[str]=mapped_column(unique=True,index=True); access_token:Mapped[str]=mapped_column(String(64),unique=True,index=True,default=lambda:secrets.token_urlsafe(24)); customer_id:Mapped[int]=mapped_column(ForeignKey("customers.id")); event_id:Mapped[int]=mapped_column(ForeignKey("events.id")); subtotal:Mapped[Decimal]=mapped_column(Numeric(10,2)); discount:Mapped[Decimal]=mapped_column(Numeric(10,2),default=0); total:Mapped[Decimal]=mapped_column(Numeric(10,2)); payment_status:Mapped[str]=mapped_column(default="pending"); status:Mapped[str]=mapped_column(default="pending"); created_at:Mapped[datetime]=mapped_column(default=now); customer:Mapped[Customer]=relationship(); event:Mapped[Event]=relationship(); tickets:Mapped[list[Ticket]]=relationship()
+    supporter_id:Mapped[int|None]=mapped_column(ForeignKey("users.id"),nullable=True,index=True)
 class Reservation(Base):
     # Completed/expired rows are audit history, not a permanent uniqueness lock.
     __tablename__="reservations"; id:Mapped[int]=mapped_column(primary_key=True); token:Mapped[str]=mapped_column(unique=True); event_id:Mapped[int]=mapped_column(ForeignKey("events.id")); section_id:Mapped[int]=mapped_column(ForeignKey("sections.id")); seat_id:Mapped[int|None]=mapped_column(ForeignKey("seats.id"),nullable=True); quantity:Mapped[int]=mapped_column(default=1); expires_at:Mapped[datetime]; completed:Mapped[bool]=mapped_column(default=False)
     selection_json:Mapped[str]=mapped_column(Text,default="{}",server_default="{}")
 class Ticket(Base):
     __tablename__="tickets"; id:Mapped[int]=mapped_column(primary_key=True); public_id:Mapped[str]=mapped_column(unique=True,index=True); qr_token:Mapped[str]=mapped_column(unique=True,index=True); order_id:Mapped[int]=mapped_column(ForeignKey("orders.id")); event_id:Mapped[int]=mapped_column(ForeignKey("events.id")); section_id:Mapped[int]=mapped_column(ForeignKey("sections.id")); seat_id:Mapped[int|None]=mapped_column(ForeignKey("seats.id"),nullable=True); ticket_class_id:Mapped[int]=mapped_column(ForeignKey("ticket_classes.id")); price:Mapped[Decimal]=mapped_column(Numeric(10,2)); status:Mapped[str]=mapped_column(default=TicketStatus.SOLD.value); complimentary:Mapped[bool]=mapped_column(default=False); cancelled_at:Mapped[datetime|None]=mapped_column(nullable=True); cancelled_by:Mapped[int|None]=mapped_column(ForeignKey("users.id"),nullable=True); cancellation_reason:Mapped[str|None]=mapped_column(nullable=True); section:Mapped[Section]=relationship(); seat:Mapped[Seat|None]=relationship(); ticket_class:Mapped[TicketClass]=relationship(); order:Mapped[Order]=relationship(back_populates="tickets")
+    attendee_user_id:Mapped[int|None]=mapped_column(ForeignKey("users.id"),nullable=True)
+    attendee_birth_date:Mapped[date|None]=mapped_column(Date,nullable=True)
 class Scan(Base):
     __tablename__="scans"; id:Mapped[int]=mapped_column(primary_key=True); ticket_id:Mapped[int]=mapped_column(ForeignKey("tickets.id")); operator_id:Mapped[int]=mapped_column(ForeignKey("users.id")); gate:Mapped[str|None]; scanned_at:Mapped[datetime]=mapped_column(default=now); result:Mapped[str]
 class AuditLog(Base):

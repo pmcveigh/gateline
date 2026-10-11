@@ -5,7 +5,7 @@
  <p>{{kickoff.strftime('%A %d %B %Y · %H:%M')}} · <a href="/venues/{{event.venue_id}}">{{event.venue.name}}</a></p>
  <a class="tag" title="{{event.competition}}" href="/competitions/{{quote(event.competition, safe='')}}">{{event.competition}}</a>
 </section>
-<h2>Select your tickets</h2>
+<h2>Select your tickets</h2>{% if supporter_profile and (supporter_profile.force_concession or supporter_profile.disability_type) %}<p class="selection-note">Accessibility and eligible concession options appear first. Adult tickets are also available.</p>{% endif %}
 {% if error %}<p class="form-error" role="alert">{{error}}</p>{% endif %}
 {% if not on_sale %}<div class="empty">Tickets are not currently on sale.</div>{% endif %}
 <div class="cards">
@@ -15,7 +15,7 @@
   <h3>{{inv.section.name}}</h3><p>{{'Choose your seats' if inv.section.mode=='assigned' else 'General admission'}}</p>
   <div class="ticket-options">
   {% for c in ticket_classes %}
-   <div class="ticket-option"><div><b>{{c.name}} <span class="ticket-unit-price">£{{'%.2f'|format(c.price)}}</span></b><small>{{c.description}}{% if c.name=='VIP' %} · Date of birth required at checkout{% endif %}</small></div>
+   <div class="ticket-option"><div><b>{{c.name}} <span class="ticket-unit-price">£{{'%.2f'|format(c.price)}}</span></b><small>{{c.description}}{% if restriction(c)=='concession' %} · Under {{c.concession_under}} or over {{c.concession_over}}, or disability concession{% elif c.name=='VIP' %} · Date of birth required at checkout{% endif %}</small></div>
     <input type="hidden" name="class_ids" value="{{c.id}}"><label>Quantity for {{c.name}}<input type="number" name="ticket_quantities" data-price="{{c.price}}" data-adult="{{'true' if is_adult(c) else 'false'}}" data-type="{{c.name}}" min="0" max="{{c.maximum}}" value="{{selection.get(c.id,'') if selection is not none else ''}}" aria-label="{{c.name}} quantity"></label>
    </div>
   {% endfor %}

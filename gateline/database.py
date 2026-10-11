@@ -67,6 +67,24 @@ def upgrade_schema():
                 connection.execute(text("ALTER TABLE ticket_classes ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT TRUE"))
             if "adult_admission" not in columns:
                 connection.execute(text("ALTER TABLE ticket_classes ADD COLUMN adult_admission BOOLEAN"))
+            for column,default in (("concession_under",16),("concession_over",65)):
+                if column not in columns:
+                    connection.execute(text(f"ALTER TABLE ticket_classes ADD COLUMN {column} INTEGER NOT NULL DEFAULT {default}"))
+
+        additions={
+            "users":{"username":"VARCHAR(30)"},
+            "orders":{"supporter_id":"INTEGER REFERENCES users(id)"},
+            "tickets":{"attendee_user_id":"INTEGER REFERENCES users(id)","attendee_birth_date":"DATE"},
+            "club_pricing":{"portal_defaults_applied":"BOOLEAN NOT NULL DEFAULT FALSE"},
+        }
+        for table,fields in additions.items():
+            if not inspect(connection).has_table(table): continue
+            columns={column["name"] for column in inspect(connection).get_columns(table)}
+            for column,definition in fields.items():
+                if column not in columns: connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {definition}"))
+        if inspect(connection).has_table("users"):
+            connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_username ON users(username)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_orders_supporter_id ON orders(supporter_id)"))
 
 def get_db():
     with SessionLocal() as db:

@@ -20,6 +20,8 @@ from .clubs import LEAGUES, build_club_groups, find_club
 from .database import Base, engine, get_db, upgrade_schema
 from .models import *
 from .services import checkout, reserve, reservation_rows, scan_ticket
+from .supporters import access_needs_for_event, active_memberships, ensure_test_supporter, preferred_classes, profile_for, restriction
+from .accounts import install_accounts
 from .ticketing import canonical_club, club_key, configure_club_tickets, is_adult, menu_for_club, minimum_adult_price, offered_classes, save_club_pricing, selected_classes, upgrade_club_tickets, VIP_MIN_AGE
 
 app=FastAPI(title="Gateline",version=__version__)
@@ -29,7 +31,9 @@ LOG_DIR=Path(os.path.expanduser(os.getenv("GATELINE_LOG_DIR", "~/gateline/logs")
 def startup():
     Base.metadata.create_all(engine)
     upgrade_schema()
-    with Session(engine) as db: upgrade_club_tickets(db)
+    with Session(engine) as db:
+        upgrade_club_tickets(db)
+        ensure_test_supporter(db)
     LOG_DIR.mkdir(parents=True,exist_ok=True)
 @app.middleware("http")
 async def load_user(request,call_next):
@@ -54,6 +58,8 @@ async def log_session(request,call_next):
     return response
 app.add_middleware(SessionMiddleware,secret_key=__import__('os').getenv("SECRET_KEY",secrets.token_hex(32)),https_only=False,same_site="lax")
 def render(request,template_name,status_code=200,**ctx): return templates.TemplateResponse(request,template_name,{"user":request.state.user,"version":__version__,"quote":quote,"minimum_adult_price":minimum_adult_price,"local_time":local_time,"filter_url":fixture_filter_url,"offered_classes":offered_classes,**ctx},status_code=status_code)
+
+install_accounts(app,render)
 
 OptionalVenueId=Annotated[int|None,BeforeValidator(lambda value: None if value=="" else value)]
 
@@ -129,7 +135,9 @@ def render_event(request,db,event_id,selection=None,error=None,status_code=200):
         held=db.scalar(select(func.coalesce(func.sum(Reservation.quantity),0)).where(Reservation.event_id==event.id,Reservation.section_id==inv.section_id,Reservation.completed==False,Reservation.expires_at>now)) or 0
         availability[inv.section_id]=max(0,inv.capacity-inv.held-sold-held)
     on_sale=bool(offered_classes(event)) and not event.cancelled and not event.sales_suspended and utc_dt(event.sales_open)<=now<=utc_dt(event.sales_close)
-    return render(request,"event.html",status_code=status_code,event=event,availability=availability,on_sale=on_sale,selection=selection,error=error,is_adult=is_adult,ticket_classes=offered_classes(event))
+    supporter=request.state.user if request.state.user and request.state.user.role=="supporter" else None
+    profile=profile_for(db,supporter) if supporter else None
+    return render(request,"event.html",status_code=status_code,event=event,availability=availability,on_sale=on_sale,selection=selection,error=error,is_adult=is_adult,ticket_classes=preferred_classes(event,profile),supporter_profile=profile,restriction=restriction)
 @app.post("/events/{event_id}/reserve")
 def make_reservation(event_id:int,request:Request,section_id:int=Form(),quantity:int=Form(0),seat_ids:str=Form(""),class_ids:list[int]=Form([]),ticket_quantities:list[str]=Form([]),db:Session=Depends(get_db)):
     selection=None
@@ -152,7 +160,13 @@ def render_checkout(request,db,token,form=None,error=None,status_code=200):
     r=rows[0]; event=db.get(Event,r.event_id); quantity=sum(row.quantity for row in rows)
     stored=json.loads(r.selection_json or "{}")
     selection=stored.get("classes",stored)
-    form=form or {}
+    supporter=request.state.user if request.state.user and request.state.user.role=="supporter" else None
+    profile=profile_for(db,supporter) if supporter else None
+    if form is None:
+        form={"full_name":supporter.name,"email":supporter.email,**{field:getattr(profile,field) for field in ("address1","address2","city","postcode","country")}} if profile else {}
+        if supporter:
+            memberships=[st for st in active_memberships(db,supporter) if st.club_name==club_key(event.home_team)]
+            if memberships: form["priority_code"]=memberships[0].number
     selection_invalid=False
     try: lines=selected_classes(event,selection,quantity) if selection else []
     except ValueError as unavailable:
@@ -164,30 +178,36 @@ def render_checkout(request,db,token,form=None,error=None,status_code=200):
     ticket_subtotal=sum((tc.price*count for tc,count in lines),Decimal("0")) if lines else Decimal("0")
     now=datetime.now(timezone.utc)
     expired=selection_invalid or any(row.completed or utc_dt(row.expires_at)<=now for row in rows)
-    return render(request,"checkout.html",status_code=status_code,reservation=r,event=event,lines=lines,quantity=quantity,ticket_subtotal=ticket_subtotal,vip_count=vip_count,vip_min_age=VIP_MIN_AGE,selection=selection,form=form,error=error,vip_discount_allowed=club_key(event.home_team)==club_key("Glentoran"),expired=expired,expires_ms=int((now if expired else utc_dt(r.expires_at)).timestamp()*1000),server_now_ms=int(now.timestamp()*1000))
+    units=[tc for tc,count in lines for _ in range(count)]
+    return render(request,"checkout.html",status_code=status_code,reservation=r,event=event,lines=lines,units=units,quantity=quantity,ticket_subtotal=ticket_subtotal,vip_count=vip_count,vip_min_age=VIP_MIN_AGE,selection=selection,form=form,error=error,supporter_profile=profile,restriction=restriction,vip_discount_allowed=club_key(event.home_team)==club_key("Glentoran"),expired=expired,expires_ms=int((now if expired else utc_dt(r.expires_at)).timestamp()*1000),server_now_ms=int(now.timestamp()*1000))
 @app.post("/checkout/{token}")
-def complete(token:str,request:Request,full_name:str=Form(),email:str=Form(),address1:str=Form(),address2:str=Form(""),city:str=Form(),postcode:str=Form(),country:str=Form(),class_id:int|None=Form(None),priority_code:str=Form(""),voucher_code:str=Form(""),test_result:str=Form("success"),vip_season_holder:bool=Form(False),vip_birth_dates:list[str]=Form([]),db:Session=Depends(get_db)):
+def complete(token:str,request:Request,full_name:str=Form(),email:str=Form(),address1:str=Form(),address2:str=Form(""),city:str=Form(),postcode:str=Form(),country:str=Form(),class_id:int|None=Form(None),priority_code:str=Form(""),voucher_code:str=Form(""),test_result:str=Form("success"),vip_season_holder:bool=Form(False),vip_birth_dates:list[str]=Form([]),personal_index:int=Form(-1),attendee_birth_dates:list[str]=Form([]),disability_indices:list[int]=Form([]),db:Session=Depends(get_db)):
     customer=dict(full_name=full_name,email=email,address1=address1,address2=address2,city=city,postcode=postcode,country=country)
-    try: order=checkout(db,token,class_id,customer,test_result,priority_code or None,voucher_code or None,vip_season_holder,vip_birth_dates)
-    except ValueError as e: return render_checkout(request,db,token,{**customer,"class_id":class_id,"priority_code":priority_code,"voucher_code":voucher_code,"vip_season_holder":vip_season_holder,"vip_birth_dates":vip_birth_dates},str(e),400)
+    supporter=request.state.user if request.state.user and request.state.user.role=="supporter" else None
+    try: order=checkout(db,token,class_id,customer,test_result,priority_code or None,voucher_code or None,vip_season_holder,vip_birth_dates,supporter=supporter,personal_index=personal_index if personal_index!=-1 else None,attendee_birth_dates=attendee_birth_dates or None,disability_indices=disability_indices)
+    except ValueError as e: return render_checkout(request,db,token,{**customer,"class_id":class_id,"priority_code":priority_code,"voucher_code":voucher_code,"vip_season_holder":vip_season_holder,"vip_birth_dates":vip_birth_dates,"attendee_birth_dates":attendee_birth_dates,"personal_index":personal_index,"disability_indices":disability_indices},str(e),400)
     return RedirectResponse(f"/orders/{order.reference}?access={order.access_token}",303)
 @app.get("/orders/{reference}",response_class=HTMLResponse)
 def confirmation(reference:str,request:Request,access:str="",db:Session=Depends(get_db)):
     order=db.scalar(select(Order).where(Order.reference==reference));
     if not order: raise HTTPException(404)
-    if (not request.state.user or request.state.user.role!="admin") and not secrets.compare_digest(access,order.access_token): raise HTTPException(404)
+    if not owns_order(request,order) and not secrets.compare_digest(access,order.access_token): raise HTTPException(404)
     return render(request,"confirmation.html",order=order,access=access)
 @app.get("/tickets/{public_id}",response_class=HTMLResponse)
 def ticket_view(public_id:str,request:Request,access:str="",db:Session=Depends(get_db)):
     ticket=db.scalar(select(Ticket).where(Ticket.public_id==public_id));
     if not ticket: raise HTTPException(404)
-    if (not request.state.user or request.state.user.role!="admin") and not secrets.compare_digest(access,ticket.order.access_token): raise HTTPException(404)
+    if not owns_order(request,ticket.order) and not secrets.compare_digest(access,ticket.order.access_token): raise HTTPException(404)
     return render(request,"ticket.html",ticket=ticket,event=db.get(Event,ticket.event_id),access=access)
 @app.get("/tickets/{public_id}/qr.png")
-def qr(public_id:str,access:str="",db:Session=Depends(get_db)):
+def qr(public_id:str,request:Request,access:str="",db:Session=Depends(get_db)):
     ticket=db.scalar(select(Ticket).where(Ticket.public_id==public_id));
-    if not ticket or not secrets.compare_digest(access,ticket.order.access_token):raise HTTPException(404)
+    if not ticket or (not owns_order(request,ticket.order) and not secrets.compare_digest(access,ticket.order.access_token)):raise HTTPException(404)
     out=BytesIO(); qrcode.make(ticket.qr_token).save(out,"PNG"); out.seek(0); return StreamingResponse(out,media_type="image/png")
+
+def owns_order(request,order):
+    user=request.state.user
+    return bool(user and (user.role=="admin" or (user.role=="supporter" and order.supporter_id==user.id)))
 
 @app.get("/login",response_class=HTMLResponse)
 def login_page(request:Request):return render(request,"login.html")
@@ -195,7 +215,7 @@ def login_page(request:Request):return render(request,"login.html")
 def login(request:Request,email:str=Form(),password:str=Form(),db:Session=Depends(get_db)):
     user=db.scalar(select(User).where(User.email==email.lower()))
     if not user or not verify(password,user.password_hash):raise HTTPException(401,"Incorrect credentials")
-    request.session["user_id"]=user.id; db.add(AuditLog(user_id=user.id,action="user.login",entity="user",entity_id=str(user.id))); db.commit(); return RedirectResponse("/admin" if user.role=="admin" else "/gate",303)
+    request.session.clear();request.session["user_id"]=user.id; db.add(AuditLog(user_id=user.id,action="user.login",entity="user",entity_id=str(user.id))); db.commit(); return RedirectResponse("/admin" if user.role=="admin" else "/account" if user.role=="supporter" else "/gate",303)
 @app.post("/logout")
 def logout(request:Request):request.session.clear();return RedirectResponse("/",303)
 @app.get("/admin",response_class=HTMLResponse)
@@ -213,9 +233,9 @@ def club_pricing_page(name:str,request:Request,user=Depends(require("admin")),db
     return render(request,"club_pricing.html",name=name,menu=menu_for_club(db,name))
 
 @app.post("/admin/clubs/{name}/pricing",response_class=HTMLResponse)
-def update_club_pricing(name:str,request:Request,ticket_names:list[str]=Form([]),ticket_prices:list[str]=Form([]),ticket_descriptions:list[str]=Form([]),ticket_categories:list[str]=Form([]),user=Depends(require("admin")),db:Session=Depends(get_db)):
+def update_club_pricing(name:str,request:Request,ticket_names:list[str]=Form([]),ticket_prices:list[str]=Form([]),ticket_descriptions:list[str]=Form([]),ticket_categories:list[str]=Form([]),concession_under:list[str]=Form([]),concession_over:list[str]=Form([]),user=Depends(require("admin")),db:Session=Depends(get_db)):
     try:
-        save_club_pricing(db,name,ticket_names,ticket_prices,ticket_descriptions,ticket_categories)
+        save_club_pricing(db,name,ticket_names,ticket_prices,ticket_descriptions,ticket_categories,concession_under or None,concession_over or None)
     except ValueError as error:
         menu=[{"name":title,"price":price,"description":description,"adult":category=="adult"} for title,price,description,category in zip(ticket_names,ticket_prices,ticket_descriptions,ticket_categories)]
         return render(request,"club_pricing.html",status_code=400,name=name,menu=menu,error=str(error))
@@ -272,7 +292,8 @@ def attendance(event_id:int,request:Request,user=Depends(require("admin")),db:Se
     valid=[t for t in tickets if t.status in ("sold","scanned")]; scanned=sum(t.status=="scanned" for t in valid); cancelled=sum(t.status in ("cancelled","refunded") for t in tickets)
     orders=db.scalars(select(Order).where(Order.event_id==event_id,Order.payment_status=="successful")).all(); gross=sum((o.total for o in orders),Decimal("0")); discounts=sum((o.discount for o in orders),Decimal("0"))
     stats={"capacity":capacity,"reserved":reserved,"issued":len(valid),"available":max(0,capacity-reserved-len(valid)),"scanned":scanned,"yet":max(0,len(valid)-scanned),"cancelled":cancelled,"sales":gross,"discounts":discounts,"utilisation":round(100*len(valid)/capacity,1) if capacity else 0,"admission_rate":round(100*scanned/len(valid),1) if valid else 0}
-    return render(request,"attendance.html",event=event,tickets=tickets,capacity=capacity,stats=stats,updated=now)
+    season_admissions=db.scalar(select(func.count(SupporterAttendance.id)).where(SupporterAttendance.event_id==event_id,SupporterAttendance.season_ticket_id.is_not(None))) or 0
+    return render(request,"attendance.html",event=event,tickets=tickets,capacity=capacity,stats=stats,updated=now,access_needs=access_needs_for_event(db,event),season_admissions=season_admissions)
 @app.post("/admin/tickets/{ticket_id}/cancel")
 def cancel(ticket_id:int,request:Request,reason:str=Form(""),user=Depends(require("admin")),db:Session=Depends(get_db)):
     t=db.get(Ticket,ticket_id)

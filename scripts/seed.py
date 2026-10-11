@@ -173,6 +173,9 @@ def seed_database() -> int:
         )
         db.commit()
 
+    with Session(engine) as db:
+        from gateline.supporters import ensure_test_supporter
+        ensure_test_supporter(db)
     return fixture_number
 
 

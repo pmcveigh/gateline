@@ -49,19 +49,17 @@ containing slashes, such as `2026/27`.
 ### Ticket selection and reservations
 Each club has a saved ticket menu in `club_pricing`. Administrators open **Club
 pricing** from Match control to set named ticket types, prices and adult-admission
-categories. Prices are explicitly entered; there is no generic £15 fallback or
-automatic Adult/Concession/Child menu. New fixtures use their home club’s saved
-menu. Saving prices updates upcoming home fixtures, while issued tickets retain
-their recorded amounts. Clubs can use Adult and Concession or their own named
-options, including Glentoran and Linfield’s bespoke menus.
+categories and concession age limits. New clubs start with Adult £15 and Concession
+£8. Administrators can edit or remove these defaults; their saved menus persist
+across restarts and retain club-specific types, including Glentoran and Linfield's
+bespoke options. Saving prices updates upcoming home fixtures, while issued
+tickets retain their recorded amounts. An explicitly empty menu disables sales.
 
-Startup imports genuinely configured existing menus and preserves their prices
-and extra types. The legacy universal demo menu (Adult £15, Concession £10, Child
-£5 with the original seed descriptions) is retired from sale rather than treated
-as a club’s pricing policy. Those class records and previously issued tickets
-remain intact. Clubs without known prices require configuration before ticket
-sales; fresh demo seeding only supplies the explicitly specified Glentoran and
-Linfield prices. Quantities start blank and supporters choose their tickets.
+Startup adds the new defaults once to existing menus that have not been explicitly
+edited by a club administrator. Existing configured prices and bespoke types are
+preserved. The old demo Concession £10 / Child £5 menu is replaced by the new
+Adult / Concession defaults without deleting historical class records or tickets.
+Ticket quantities start blank.
 Public ticket pages do not display remaining stock; server capacity checks and
 staff attendance statistics remain available.
 
@@ -69,12 +67,52 @@ Supporters can reserve a mixture of ticket types in one booking. Each Under 11
 ticket requires at least one paid adult ticket in the same booking; no
 adult-to-child ratio is imposed. Concession-only bookings do not qualify, and a
 voucher that makes the accompanying adult ticket free is rejected for this child discount.
-Glentoran VIP tickets cost £70, or £50 when the season-ticket option is selected
-and a number in the existing `priority_identifiers` register has sufficient unused
-entitlement. Entitlement is consumed only after successful payment. VIP attendees
-must be 18 or older on the match date; checkout checks a date of birth for every
-VIP attendee. Eligibility is rechecked on the server, including for legacy
-single-type reservations.
+Glentoran VIP tickets cost £70, or £50 for the verified season-ticket holder's own
+VIP ticket. Dedicated season-ticket records are club scoped, date limited and
+linked to a supporter account; entering another person's number cannot claim the
+discount. Guest VIP tickets keep their normal price. Legacy priority identifiers
+remain compatible, with their existing entitlement limits consumed on successful
+payment. VIP attendees must be 18 or older on match day. Under 11 tickets require
+a date of birth for an attendee under 11. Eligibility is checked on the server.
+
+### Supporter portal
+Open `/register` to create an account, or `/account/login` to sign in with a
+username or email. Accounts have a required date of birth and multiple followed
+clubs. `/account` puts followed clubs first, shows availability notifications for
+matches without valid tickets or season coverage, and lists bookings, sections,
+distinct matches bought, active season tickets and matches actually attended.
+Only new authenticated bookings belong to that account; matching a guest order's
+email does not grant access. Mark one attendee as **This is my ticket** so their
+saved age and access preferences apply and gate scans count personal attendance.
+Guest attendees have separate eligibility details and never inflate the buyer's
+attendance count. Ordinary Adult tickets remain purchasable at any age.
+
+Concession defaults are strictly **under 16 or over 65**, evaluated on match day,
+with editable club limits. The profile's **Force concession due to disability**
+option permits concessions regardless of age. Dedicated disabled/accessibility
+types appear first, then eligible concessions; Adult and other available tickets
+remain selectable if a discounted option is unavailable. Optional disability type
+and access details are shown to administrators of relevant matches only when the
+supporter opts into sharing. Revoking consent immediately removes them from those
+dashboards. Bookings for guests do not share the account holder's access needs.
+
+The requested test identity is created once on startup and by the demo seed:
+`philmcveigh` / `password123!`, Phil McVeigh, `phil.mcveigh@gateline.com`, born
+17 March 1992, following Glentoran. The Glentoran season-ticket register contains
+**12345**, **Sydenham End**, **Adult**, linked to this account. Its initial validity
+is the current July–June season for home NIFL Premiership fixtures; cup and away
+matches require separate tickets. Existing profile/password changes are preserved.
+The account includes a printable season pass with its own QR code, and gate staff
+can scan it or type the club-scoped season number. A unique supporter/fixture
+attendance record prevents duplicate admission using a personal ticket and pass.
+Season-pass admissions are reported separately from the existing ticket-stock
+statistics; no stadium inventory allocation is inferred from a season section.
+Administrators can open a club's **Season-ticket register** from its pricing page.
+
+The additive portal schema migration is applied on startup. Operators managing
+SQL manually can use `migrations/004_supporter_portal.sql`; the application then
+initialises menus and the test record. This is a demo identity with the supplied
+password, so disable it or change its password before any production deployment.
 
 Selections and the existing reservation deadline persist across checkout reloads
 and validation errors. The countdown disables payment when time runs out; the
@@ -108,7 +146,7 @@ Tests cover reservation exclusivity/capacity/expiry, priority and voucher enforc
 * `tests/` — critical business rules.
 
 ## Current limitations and roadmap
-v0.1.8 uses a test payment provider, browser print-to-PDF, online scanning, a single configured club, simple stand gate assignment and ten-minute lazy-expiry reservations. Email/SMS, wallets, offline/hardware scanning, full season tickets, supporter accounts/CRM, resale, hospitality, accounting and dynamic pricing are intentionally excluded. Future releases can add a background expiry worker, Stripe/Worldpay adapters, PostgreSQL row locking, broader decoder compatibility, richer venue editing and multi-organisation tenancy without changing the core ticket lifecycle.
+v0.1.8 uses a test payment provider, browser print-to-PDF, online scanning, a single configured club, simple stand gate assignment and ten-minute lazy-expiry reservations. Email/SMS, wallets, offline/hardware scanning, season-ticket administration/renewals, verified identity/age checks, email verification/password recovery, resale, hospitality, accounting and dynamic pricing are intentionally excluded. Future releases can add a background expiry worker, Stripe/Worldpay adapters, PostgreSQL row locking, broader decoder compatibility, richer venue editing and multi-organisation tenancy without changing the core ticket lifecycle.
 
 ## v0.1.8 camera and HTTPS testing
 Gate operators can use manual ticket entry, a keyboard-wedge scanner, native image capture/upload, or an in-page camera started explicitly with **Take QR photo**. Image decoding is local through the browser `BarcodeDetector`; unsupported browsers clearly fall back to manual/wedge entry. Photos are not uploaded or retained. Webcam APIs require HTTPS or trusted `localhost`—a phone visiting an ordinary `http://192.168.x.x` LAN address is **not** localhost.

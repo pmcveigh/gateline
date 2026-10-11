@@ -3,8 +3,10 @@ from decimal import Decimal, ROUND_HALF_UP
 import json, secrets
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from .models import *
 from .ticketing import club_key, is_adult, selected_classes, ticket_prefix, validate_vip_ages
+from .supporters import london_date, scan_season_ticket, validate_attendees
 
 def utc(value: datetime) -> datetime:
     """Return a comparable UTC datetime (SQLite drops timezone metadata)."""
@@ -59,7 +61,7 @@ def reservation_rows(db, token):
     return db.scalars(select(Reservation).where(Reservation.token.in_([token]+[f"{token}-{i}" for i in range(1,10)])).order_by(Reservation.id)).all()
 
 
-def checkout(db:Session, reservation_token:str, class_id:int|None, customer_data:dict, payment_result="success", priority_code=None, voucher_code=None, vip_season_holder=False, vip_birth_dates=()):
+def checkout(db:Session, reservation_token:str, class_id:int|None, customer_data:dict, payment_result="success", priority_code=None, voucher_code=None, vip_season_holder=False, vip_birth_dates=(), *, supporter=None, personal_index=None, attendee_birth_dates=None, disability_indices=()):
     now=datetime.now(timezone.utc); reservations=reservation_rows(db,reservation_token)
     if not reservations or any(r.completed or utc(r.expires_at)<=now for r in reservations): raise ValueError("Reservation has expired or has already been completed")
     event=db.get(Event,reservations[0].event_id); qty=sum(r.quantity for r in reservations)
@@ -67,7 +69,13 @@ def checkout(db:Session, reservation_token:str, class_id:int|None, customer_data
     stored=json.loads(reservations[0].selection_json or "{}")
     selection=stored.get("classes",stored) or {class_id:qty}
     lines=selected_classes(event,selection,qty)
-    validate_vip_ages(event,lines,vip_birth_dates)
+    profile=db.get(SupporterProfile,supporter.id) if supporter and supporter.role=="supporter" else None
+    if supporter and supporter.role!="supporter": raise ValueError("Use a supporter account to book personal tickets")
+    if attendee_birth_dates is None:
+        validate_vip_ages(event,lines,vip_birth_dates)
+        dates=iter(vip_birth_dates)
+        attendee_birth_dates=[next(dates) if tc.name=="VIP" else "" for tc,count in lines for _ in range(count)]
+    birth_dates=validate_attendees(event,lines,profile,personal_index,attendee_birth_dates,disability_indices)
     required=("full_name","email","address1","city","postcode","country")
     if any(not str(customer_data.get(key,"")).strip() for key in required) or "@" not in customer_data.get("email",""): raise ValueError("Enter a valid name, email and postal address")
     vip_qty=sum(count for tc,count in lines if tc.name=="VIP")
@@ -75,14 +83,30 @@ def checkout(db:Session, reservation_token:str, class_id:int|None, customer_data
     discounted_vip=vip_qty if vip_season_holder and club_key(event.home_team)==club_key("Glentoran") else 0
     entitlement=max(priority_qty,discounted_vip)
     priority=None
+    membership=None
     if entitlement:
-        priority=db.scalar(select(PriorityIdentifier).where(func.upper(PriorityIdentifier.code)==str(priority_code or "").strip().upper()))
-        if not priority or priority.used+entitlement>priority.maximum: raise ValueError("A valid season-ticket number with sufficient entitlement is required")
+        code=str(priority_code or "").strip()
+        membership=db.scalar(select(SeasonTicket).where(SeasonTicket.club_name==club_key(event.home_team),SeasonTicket.number==code))
+        if membership:
+            day=london_date(event.starts_at)
+            if not supporter or membership.user_id!=supporter.id or not membership.active or not membership.valid_from<=day<=membership.valid_until:
+                raise ValueError("A valid season-ticket number belonging to your account is required")
+            units_classes=[tc for tc,count in lines for _ in range(count)]
+            if discounted_vip and (personal_index is None or units_classes[personal_index].name!="VIP"):
+                raise ValueError("The season-ticket VIP price applies to your own VIP ticket")
+            if priority_qty>1 or (priority_qty and personal_index is None): raise ValueError("Season-ticket priority access covers one personal ticket per booking")
+            if priority_qty:
+                prior=db.scalar(select(Ticket.id).where(Ticket.event_id==event.id,Ticket.attendee_user_id==supporter.id,Ticket.status.in_(["sold","scanned"])))
+                if prior: raise ValueError("You already have a personal ticket for this fixture")
+            discounted_vip=1 if discounted_vip else 0
+        else:
+            priority=db.scalar(select(PriorityIdentifier).where(func.upper(PriorityIdentifier.code)==code.upper()))
+            if not priority or priority.used+entitlement>priority.maximum: raise ValueError("A valid season-ticket number with sufficient entitlement is required")
     money=lambda value: Decimal(value).quantize(Decimal("0.01"),rounding=ROUND_HALF_UP)
-    priced=[(tc,count,Decimal("50") if discounted_vip and tc.name=="VIP" else tc.price) for tc,count in lines]
-    subtotal=money(sum((price*count for _,count,price in priced),Decimal("0")))
+    units=[(tc,tc.price) for tc,count in lines for _ in range(count)]
+    units=[(tc,Decimal("50") if discounted_vip and tc.name=="VIP" and (not membership or index==personal_index) else price) for index,(tc,price) in enumerate(units)]
+    subtotal=money(sum((price for _,price in units),Decimal("0")))
     discount=money(voucher_discount(db,voucher_code,event.id,subtotal))
-    units=[(tc,price) for tc,count,price in priced for _ in range(count)]
     gross=Decimal("0"); allocated=Decimal("0"); ticket_prices=[]
     for tc,price in units:
         gross+=price
@@ -91,7 +115,7 @@ def checkout(db:Session, reservation_token:str, class_id:int|None, customer_data
     if any(tc.name=="Under 11" for tc,_ in lines) and not any(is_adult(tc) and net>0 for (tc,_),net in zip(units,ticket_prices)):
         raise ValueError("Under 11 tickets require a paying adult; this voucher would make the adult ticket free")
     customer=Customer(**{k:str(v).strip() for k,v in customer_data.items()}); db.add(customer); db.flush()
-    order=Order(reference="GL-"+secrets.token_hex(4).upper(),customer_id=customer.id,event_id=event.id,subtotal=subtotal,discount=discount,total=subtotal-discount); db.add(order); db.flush()
+    order=Order(reference="GL-"+secrets.token_hex(4).upper(),customer_id=customer.id,event_id=event.id,subtotal=subtotal,discount=discount,total=subtotal-discount,supporter_id=supporter.id if supporter else None); db.add(order); db.flush()
     payment=SimulatedPaymentService().charge(order.total,payment_result); order.payment_status="successful" if payment.successful else "failed"; order.status="complete" if payment.successful else "failed"
     if payment.successful:
         ids=[r.id for r in reservations]
@@ -105,8 +129,9 @@ def checkout(db:Session, reservation_token:str, class_id:int|None, customer_data
         index=0
         for r in reservations:
             for _ in range(r.quantity):
-                tc,_=units[index]; net=ticket_prices[index]; index+=1
-                db.add(Ticket(public_id=ticket_prefix(event.home_team)+"-"+secrets.token_hex(6).upper(),qr_token=secrets.token_urlsafe(32),order_id=order.id,event_id=event.id,section_id=r.section_id,seat_id=r.seat_id,ticket_class_id=tc.id,price=net,status="sold"))
+                tc,_=units[index]; net=ticket_prices[index]
+                db.add(Ticket(public_id=ticket_prefix(event.home_team)+"-"+secrets.token_hex(6).upper(),qr_token=secrets.token_urlsafe(32),order_id=order.id,event_id=event.id,section_id=r.section_id,seat_id=r.seat_id,ticket_class_id=tc.id,price=net,status="sold",attendee_user_id=supporter.id if supporter and index==personal_index else None,attendee_birth_date=birth_dates[index]))
+                index+=1
         if voucher_code: db.scalar(select(Voucher).where(func.upper(Voucher.code)==voucher_code.upper())).uses+=1
     db.commit(); db.refresh(order); return order
 
@@ -114,7 +139,7 @@ def scan_ticket(db, token, event_id, operator, gate=None, override=False):
     # Hardware scanners submit the opaque QR payload, while gate staff may need
     # to type the supporter-facing ticket ID when a code cannot be read.
     ticket=db.scalar(select(Ticket).where((Ticket.qr_token==token)|(func.upper(Ticket.public_id)==token.upper())))
-    if not ticket: return {"result":"INVALID","detail":"Ticket not recognised"}
+    if not ticket: return scan_season_ticket(db,token,event_id,operator)
     if ticket.event_id!=event_id: return {"result":"WRONG FIXTURE","detail":"Select the ticket's fixture"}
     if ticket.status in ["cancelled","refunded","expired"]: return {"result":"INVALID TICKET","detail":ticket.status.upper()+" — admission is not permitted"}
     prior=db.scalar(select(Scan).where(Scan.ticket_id==ticket.id,Scan.result=="valid"))
@@ -127,5 +152,9 @@ def scan_ticket(db, token, event_id, operator, gate=None, override=False):
     changed=db.execute(update(Ticket).where(Ticket.id==ticket.id,Ticket.status=="sold").values(status="scanned"))
     if changed.rowcount != 1:
         db.rollback(); return {"result":"ALREADY USED","detail":"Previously scanned"}
-    db.add(Scan(ticket_id=ticket.id,operator_id=operator.id,gate=gate,result="valid")); db.commit()
+    db.add(Scan(ticket_id=ticket.id,operator_id=operator.id,gate=gate,result="valid"))
+    if ticket.attendee_user_id: db.add(SupporterAttendance(user_id=ticket.attendee_user_id,event_id=event_id,ticket_id=ticket.id,operator_id=operator.id))
+    try: db.commit()
+    except IntegrityError:
+        db.rollback();return {"result":"ALREADY USED","detail":"Supporter has already entered this fixture"}
     return {"result":"VALID","detail":f"{ticket.ticket_class.name} · {ticket.section.name}"}
