@@ -29,6 +29,16 @@ These credentials are created by `scripts/seed.py` and must not be used in produ
   and the 2026 NIFL Women's Premiership
 * All 36 clubs and their 28 home stadiums, including grounds shared across teams
 
+### Club browsing
+The fixture finder groups the supplied club directory into NIFL Premiership,
+NIFL Championship, NCL Premier and NIFL Women's. League sections collapse to
+keep the picker compact; the selected club's league opens automatically. The
+47 directory clubs remain browsable without published fixtures. Existing fixture
+clubs outside this directory remain under Other clubs. Women's teams have
+separate filter identities, and straight/curly apostrophes in Queen's University
+resolve to the same fixtures. Directory stadium, location and capacity information
+lives in `gateline/clubs.py`; it does not alter ticket inventory or existing venues.
+
 ## Database and migrations
 The application creates a new schema on first start. Schema evolution lives in `migrations/`; for this initial baseline run the included SQL or the seed script. Set `DATABASE_URL=postgresql+psycopg://...` for PostgreSQL and install its driver.
 
