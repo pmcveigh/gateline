@@ -1,1 +1,31 @@
-{% extends 'base.html' %}{% block content %}<div class="checkout"><section><p class="eyebrow">SECURE CHECKOUT</p><h1>Your details</h1><p>Your tickets for <b>{{event.title}}</b> are held for 10 minutes.</p><form method="post" class="grid"><label>Full name<input name="full_name" required></label><label>Email address<input name="email" type="email" required></label><label>Address line 1<input name="address1" required></label><label>Address line 2<input name="address2"></label><label>Town/city<input name="city" required></label><label>Postcode<input name="postcode" required></label><label>Country<input name="country" value="United Kingdom" required></label><label>Ticket class<select name="class_id">{% for c in event.classes %}<option value="{{c.id}}">{{c.name}} — £{{'%.2f'|format(c.price)}}</option>{% endfor %}</select></label><label>Season-ticket number<input name="priority_code"></label><label>Voucher code<input name="voucher_code"></label><label>Test payment<select name="test_result"><option value="success">Approve test payment</option><option value="fail">Decline test payment</option></select></label><button class="wide">Complete test payment</button></form></section></div>{% endblock %}
+{% extends 'base.html' %}{% block content %}
+<div class="checkout"><p class="eyebrow">SECURE CHECKOUT</p><h1>Your details</h1><p>Tickets for <b>{{event.title}}</b></p>
+<div class="reservation-timer" data-expires="{{expires_ms}}" data-server-now="{{server_now_ms}}"><span>Time left to complete your booking</span><b role="timer" id="reservation-countdown">{{'00:00' if expired else 'Calculating…'}}</b></div>
+<p id="reservation-expired" class="form-error" role="status" {% if not expired %}hidden{% endif %}>This reservation has expired or is already complete. <a href="/events/{{event.id}}">Select tickets again</a>.</p>
+{% if error %}<p class="form-error" role="alert">{{error}}</p>{% endif %}
+<form method="post" class="grid" id="checkout-form">
+ <fieldset class="wide booking-summary"><legend>Your tickets</legend>
+ {% if selection %}
+  {% for c, count in lines %}<p class="booking-line" data-price="{{c.price}}" data-quantity="{{count}}" data-vip="{{'true' if c.name=='VIP' else 'false'}}"><span>{{count}} × {{c.name}}</span><b class="booking-line-price">£{{'%.2f'|format(c.price*count)}}</b></p>{% endfor %}
+ {% else %}
+  <label>Ticket type ({{quantity}} tickets)<select name="class_id" id="legacy-class" data-quantity="{{quantity}}">{% for c in event.classes %}<option value="{{c.id}}" data-price="{{c.price}}" data-vip="{{'true' if c.name=='VIP' else 'false'}}" {{'selected' if form.get('class_id')==c.id}}>{{c.name}} — £{{'%.2f'|format(c.price)}} each</option>{% endfor %}</select></label>
+ {% endif %}
+ <p class="booking-total" aria-live="polite">Ticket subtotal <b id="booking-total">£{{'%.2f'|format(ticket_subtotal)}}</b></p><small>Voucher discounts are applied when you complete payment.</small>
+ </fieldset>
+ <label>Full name<input name="full_name" value="{{form.get('full_name','')}}" required autocomplete="name"></label>
+ <label>Email address<input name="email" value="{{form.get('email','')}}" type="email" required autocomplete="email"></label>
+ <label>Address line 1<input name="address1" value="{{form.get('address1','')}}" required autocomplete="address-line1"></label>
+ <label>Address line 2<input name="address2" value="{{form.get('address2','')}}" autocomplete="address-line2"></label>
+ <label>Town/city<input name="city" value="{{form.get('city','')}}" required autocomplete="address-level2"></label>
+ <label>Postcode<input name="postcode" value="{{form.get('postcode','')}}" required autocomplete="postal-code"></label>
+ <label>Country<input name="country" value="{{form.get('country','United Kingdom')}}" required autocomplete="country-name"></label>
+ <label>Season-ticket number<input name="priority_code" id="season-ticket-number" value="{{form.get('priority_code','')}}"><small>Required for priority sales or the Glentoran VIP season-ticket price.</small></label>
+ {% if event.home_team=='Glentoran' %}<label class="wide checkbox-label" id="vip-discount" {% if not vip_count %}hidden{% endif %}><input type="checkbox" name="vip_season_holder" value="true" {{'checked' if form.get('vip_season_holder')}}>Apply the £50 VIP season-ticket price (valid number and sufficient entitlement required)</label>{% endif %}
+ <fieldset class="wide" id="vip-attendees" data-min-age="{{vip_min_age}}" {% if not vip_count %}hidden{% endif %}><legend>VIP attendees — aged {{vip_min_age}} and above</legend><div id="vip-birth-dates">{% for i in range(vip_count) %}<label>VIP attendee {{i+1}} date of birth<input type="date" name="vip_birth_dates" required value="{{form.get('vip_birth_dates',[])[i] if i < form.get('vip_birth_dates',[])|length else ''}}"></label>{% endfor %}</div></fieldset>
+ <label>Voucher code<input name="voucher_code" value="{{form.get('voucher_code','')}}"></label>
+ <label>Test payment<select name="test_result"><option value="success">Approve test payment</option><option value="fail">Decline test payment</option></select></label>
+ <button class="wide" id="complete-payment" {{'disabled' if expired}}>Complete test payment</button>
+</form>
+<noscript><p>The reservation expires at {{reservation.expires_at.strftime('%H:%M')}} UTC. Eligibility and prices are checked when you pay.</p></noscript>
+</div><script src="/static/checkout.js" defer></script>
+{% endblock %}

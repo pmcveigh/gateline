@@ -1,6 +1,9 @@
+{% set kickoff = local_time(e.starts_at) %}
 <article class="match">
- <time>{{e.starts_at.strftime('%H:%M')}}</time>
+ <time datetime="{{e.starts_at.isoformat()}}">{% if show_match_dates|default(false) %}<span class="match-date">{{kickoff.strftime('%d %b %Y')}}</span>{% endif %}{{kickoff.strftime('%H:%M')}}</time>
  <div class="match-info"><h3><a href="/events/{{e.id}}">{{e.title}}</a></h3><p><a href="/venues/{{e.venue_id}}">{{e.venue.name}}</a></p></div>
  <a class="button" href="/events/{{e.id}}" aria-label="Tickets for {{e.title}}">Tickets</a>
+ {% set adult_price = minimum_adult_price(e) %}
+ <p class="match-price">{% if adult_price is not none %}Adult tickets from £{{'%.2f'|format(adult_price)}}{% else %}Adult tickets unavailable{% endif %}</p>
  <a class="tag match-competition" href="/competitions/{{quote(e.competition, safe='')}}" title="{{e.competition}}">{{e.competition}}</a>
 </article>

@@ -10,6 +10,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from gateline.auth import hash_password
+from gateline.ticketing import configure_club_tickets
 from gateline.database import Base, SessionLocal, engine
 from gateline.models import (
     Club,
@@ -162,6 +163,10 @@ def seed_database() -> int:
                         ]
                     ]
                 )
+
+        db.flush()
+        for event in db.query(Event).all():
+            configure_club_tickets(db, event)
 
         db.add_all(
             [

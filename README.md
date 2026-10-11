@@ -31,13 +31,44 @@ These credentials are created by `scripts/seed.py` and must not be used in produ
 
 ### Club browsing
 The fixture finder groups the supplied club directory into NIFL Premiership,
-NIFL Championship, NCL Premier and NIFL Women's. League sections collapse to
-keep the picker compact; the selected club's league opens automatically. The
-47 directory clubs remain browsable without published fixtures. Existing fixture
+NIFL Championship, NCL Premier and NIFL Women's. Clubs, stadium, competition and
+date filters share a sidebar, which collapses on mobile. League sections collapse
+to keep the picker compact; the selected club's league opens automatically. The
+48 directory clubs, including Limavady United in the Premiership, remain browsable without published fixtures. Existing fixture
 clubs outside this directory remain under Other clubs. Women's teams have
 separate filter identities, and straight/curly apostrophes in Queen's University
 resolve to the same fixtures. Directory stadium, location and capacity information
 lives in `gateline/clubs.py`; it does not alter ticket inventory or existing venues.
+
+Fixture cards show the minimum adult ticket price for that event, excluding child
+and concession prices. Club, stadium and competition profile cards include the
+fixture date and kick-off in Europe/London. Competition links support season names
+containing slashes, such as `2026/27`.
+
+### Ticket selection and reservations
+Standard adult tickets default to £15 when creating a fixture. Glentoran and
+Linfield also receive their configured menus from `gateline/ticketing.py` during
+startup, demo seeding and fixture creation. Startup adds missing types and applies
+the configured prices without reseeding events, modifying inventory or changing
+prices recorded on issued tickets.
+
+Supporters can reserve a mixture of ticket types in one booking. Each Under 11
+ticket requires at least one paid adult ticket in the same booking; no
+adult-to-child ratio is imposed. Concession-only bookings do not qualify, and a
+voucher that makes the accompanying adult ticket free is rejected for this child discount.
+Glentoran VIP tickets cost £70, or £50 when the season-ticket option is selected
+and a number in the existing `priority_identifiers` register has sufficient unused
+entitlement. Entitlement is consumed only after successful payment. VIP attendees
+must be 18 or older on the match date; checkout checks a date of birth for every
+VIP attendee. Eligibility is rechecked on the server, including for legacy
+single-type reservations.
+
+Selections and the existing reservation deadline persist across checkout reloads
+and validation errors. The countdown disables payment when time runs out; the
+server independently rejects expired or completed bookings. The normal hold is
+10 minutes, shortened if sales close earlier. The additive reservation selection
+column is upgraded automatically on startup; `migrations/002_reservation_ticket_selection.sql`
+is provided for operators who apply SQL migrations manually.
 
 ## Database and migrations
 The application creates a new schema on first start. Schema evolution lives in `migrations/`; for this initial baseline run the included SQL or the seed script. Set `DATABASE_URL=postgresql+psycopg://...` for PostgreSQL and install its driver.

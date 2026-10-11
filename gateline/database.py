@@ -55,6 +55,12 @@ def upgrade_schema():
             )
         )
 
+        # Legacy reservations retain their single-class checkout behaviour.
+        if inspect(connection).has_table("reservations"):
+            columns = {column["name"] for column in inspect(connection).get_columns("reservations")}
+            if "selection_json" not in columns:
+                connection.execute(text("ALTER TABLE reservations ADD COLUMN selection_json TEXT NOT NULL DEFAULT '{}'"))
+
 def get_db():
     with SessionLocal() as db:
         yield db

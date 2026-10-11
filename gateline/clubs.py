@@ -33,6 +33,7 @@ LEAGUES = {
         ClubEntry("Dungannon Swifts", "Stangmore Park", "Dungannon", "1,500", "4th"),
         ClubEntry("Glentoran", "The Oval", "Belfast", "6,050", "3rd"),
         ClubEntry("Larne", "Inver Park", "Larne", "3,250", "2nd"),
+        ClubEntry("Limavady United", "Limavady Showgrounds", "Limavady"),
         ClubEntry("Linfield", "Windsor Park", "Belfast", "18,614", "1st (League winners)"),
         ClubEntry("Portadown", "Shamrock Park", "Portadown", "2,770", "8th"),
     ),
