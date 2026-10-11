@@ -1,0 +1,4 @@
+{% extends 'base.html' %}{% block content %}
+<a href="/admin">← Match control</a><p class="eyebrow">CLUB ADMINISTRATION</p><h1>Club pricing</h1><p>Set each club’s ticket types and prices. Clubs can use Adult and Concession or their own named options.</p>
+<div class="pricing-clubs">{% for name in clubs %}<a class="button secondary" href="/admin/clubs/{{quote(name,safe='')}}/pricing">{{name}}</a>{% endfor %}</div>
+{% endblock %}

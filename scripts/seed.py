@@ -1,7 +1,6 @@
 """Create a disposable demo database covering the 2026/27 NIFL clubs."""
 
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 import os
 from pathlib import Path
 import re
@@ -19,7 +18,6 @@ from gateline.models import (
     PriorityIdentifier,
     Section,
     Stand,
-    TicketClass,
     User,
     Venue,
 )
@@ -148,21 +146,7 @@ def seed_database() -> int:
                         capacity=section.capacity,
                     )
                 )
-                db.add_all(
-                    [
-                        TicketClass(
-                            event_id=event.id,
-                            name=name,
-                            description=description,
-                            price=price,
-                        )
-                        for name, description, price in [
-                            ("Adult", "Standard admission", Decimal("15")),
-                            ("Concession", "Eligible concessions", Decimal("10")),
-                            ("Child", "Under 16", Decimal("5")),
-                        ]
-                    ]
-                )
+
 
         db.flush()
         for event in db.query(Event).all():

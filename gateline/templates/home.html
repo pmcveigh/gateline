@@ -1,27 +1,30 @@
 {% extends 'base.html' %}{% block main_class %}fixture-finder{% endblock %}{% block content %}
 <section class="compact-head"><div><p class="eyebrow">MATCH TICKETS</p><h1>Find your fixture</h1></div><p>Official tickets, without the fuss.</p></section>
 <div class="finder-layout">
-<aside class="finder-sidebar" aria-label="Fixture filters"><details class="sidebar-panel" open><summary>Clubs &amp; filters</summary><div class="sidebar-content">
+<aside class="finder-sidebar" aria-label="Browse by club"><details class="sidebar-panel" open><summary>Choose a club</summary><div class="sidebar-content">
 <section class="club-picker" aria-labelledby="club-picker-title">
- <div class="section-title"><h2 id="club-picker-title">Browse by club</h2><a class="club-card {{'active' if not filters.club}}" href="/?{% if filters.venue %}venue={{filters.venue}}&{% endif %}{% if filters.competition %}competition={{quote(filters.competition)}}&{% endif %}{% if filters.date %}date={{filters.date}}{% endif %}" {% if not filters.club %}aria-current="true"{% endif %}>All clubs</a></div>
+ <div class="section-title"><h2 id="club-picker-title">Browse by club</h2><a class="club-card {{'active' if not filters.club}}" href="{{filter_url(filters,club='')}}" {% if not filters.club %}aria-current="true"{% endif %}>All clubs</a></div>
  <div class="league-list">
  {% for league, league_clubs in club_groups %}
   <details class="league-group" {% if filters.club in league_clubs|map(attribute='name')|list or (not filters.club and loop.first) %}open{% endif %}>
    <summary><span>{{league}}</span><small>{{league_clubs|length}} club{{'' if league_clubs|length==1 else 's'}}</small></summary>
    <div class="club-grid">
-   {% for item in league_clubs %}<a class="club-card {{'active' if filters.club==item.name}}" href="/?club={{quote(item.name)}}{% if filters.venue %}&venue={{filters.venue}}{% endif %}{% if filters.competition %}&competition={{quote(filters.competition)}}{% endif %}{% if filters.date %}&date={{filters.date}}{% endif %}" {% if filters.club==item.name %}aria-current="true"{% endif %}>{{item.display_name}}</a>{% endfor %}
+   {% for item in league_clubs %}<a class="club-card {{'active' if filters.club==item.name}}" href="{{filter_url(filters,club=item.name)}}" {% if filters.club==item.name %}aria-current="true"{% endif %}>{{item.display_name}}</a>{% endfor %}
    </div>
   </details>
  {% endfor %}
  </div>
-</section>
-<form class="filters" method="get">
- <input type="hidden" name="club" value="{{filters.club}}">
- <label>Stadium<select name="venue"><option value="">All stadiums</option>{% for item in venues %}<option value="{{item.id}}" {{'selected' if filters.venue==item.id}}>{{item.name}}</option>{% endfor %}</select></label>
- <label>Competition<select name="competition"><option value="">All competitions</option>{% for name in competitions %}<option {{'selected' if filters.competition==name}}>{{name}}</option>{% endfor %}</select></label>
- <label>Date<input type="date" name="date" value="{{filters.date}}"></label><button>Filter</button><a href="/" class="clear">Clear</a>
-</form>
-</div></details></aside>
-<section class="fixture-results"><div class="section-title"><h2>Fixtures</h2><span>{{events|length}} matches</span></div><div class="calendar" aria-label="Fixture calendar">
-{% for day, day_events in calendar %}<details class="day" open><summary><b>{{day.strftime('%d')}}</b><span>{{day.strftime('%b %Y')}}</span><em>{{day_events|length}} match{{'' if day_events|length==1 else 'es'}}</em></summary><div class="day-events">{% for e in day_events %}{% include '_match.html' %}{% endfor %}</div></details>{% else %}<div class="empty">No fixtures match these filters.</div>{% endfor %}
+</section></div></details></aside>
+<section class="fixture-results">
+<nav class="quick-filters" aria-label="Fixture filters">
+ <details class="filter-menu" name="fixture-filter"><summary>Stadium{% for item in venues if item.id==filters.venue %}: <span title="{{item.name}}">{{item.name}}</span>{% endfor %}</summary>
+  <div class="filter-options"><a class="filter-choice {{'selected' if not filters.venue}}" href="{{filter_url(filters,venue=none)}}" {% if not filters.venue %}aria-current="true"{% endif %}>All stadiums</a>{% for item in venues %}<a class="filter-choice {{'selected' if filters.venue==item.id}}" href="{{filter_url(filters,venue=item.id)}}" {% if filters.venue==item.id %}aria-current="true"{% endif %}>{{item.name}}</a>{% endfor %}</div>
+ </details>
+ <details class="filter-menu" name="fixture-filter"><summary>Competition{% if filters.competition %}: <span title="{{filters.competition}}">{{filters.competition}}</span>{% endif %}</summary>
+  <div class="filter-options"><a class="filter-choice {{'selected' if not filters.competition}}" href="{{filter_url(filters,competition='')}}" {% if not filters.competition %}aria-current="true"{% endif %}>All competitions</a>{% for name in competitions %}<a class="filter-choice {{'selected' if filters.competition==name}}" href="{{filter_url(filters,competition=name)}}" {% if filters.competition==name %}aria-current="true"{% endif %}>{{name}}</a>{% endfor %}</div>
+ </details>
+ {% if filters.venue or filters.competition %}<a class="reset-filters" href="{{filter_url(filters,venue=none,competition='')}}">Reset filters</a>{% endif %}
+</nav>
+<div class="section-title"><h2>Fixtures</h2><span>{{events|length}} match{{'' if events|length==1 else 'es'}}</span></div><div class="calendar" aria-label="Fixture calendar">
+{% for day, day_events in calendar %}<details class="day" open><summary><b>{{day.strftime('%d')}}</b><span>{{day.strftime('%b %Y')}}</span></summary><div class="day-events">{% for e in day_events %}{% include '_match.html' %}{% endfor %}</div></details>{% else %}<div class="empty">No fixtures match these filters.</div>{% endfor %}
 </div></section></div><script src="/static/finder.js" defer></script>{% endblock %}
