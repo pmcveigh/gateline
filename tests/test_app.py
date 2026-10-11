@@ -66,6 +66,8 @@ def test_schema_upgrade_updates_an_existing_database(monkeypatch, tmp_path):
         connection.execute(
             text("INSERT INTO orders (id, reference) VALUES (1, 'ORDER-1')")
         )
+        connection.execute(text("CREATE TABLE reservations (id INTEGER PRIMARY KEY)"))
+        connection.execute(text("INSERT INTO reservations (id) VALUES (1)"))
 
     monkeypatch.setattr(database, "engine", engine)
     database.upgrade_schema()
@@ -79,7 +81,9 @@ def test_schema_upgrade_updates_an_existing_database(monkeypatch, tmp_path):
         token = connection.scalar(
             text("SELECT access_token FROM orders WHERE id = 1")
         )
+        selection = connection.scalar(text("SELECT selection_json FROM reservations WHERE id = 1"))
 
     assert event_columns["sales_suspended"]["nullable"] is False
     assert event_columns["archived"]["nullable"] is False
     assert token
+    assert selection == "{}"

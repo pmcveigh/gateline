@@ -1,1 +1,32 @@
-{% extends 'base.html' %}{% block content %}<a href="/">← All matches</a><section class="event-head"><h1><a href="/clubs/{{quote(event.home_team, safe='')}}">{{event.home_team}}</a> v <a href="/clubs/{{quote(event.away_team, safe='')}}">{{event.away_team}}</a></h1><p>{{event.starts_at.strftime('%A %d %B %Y · %H:%M')}} · <a href="/venues/{{event.venue_id}}">{{event.venue.name}}</a></p><a class="tag" title="{{event.competition}}" href="/competitions/{{quote(event.competition, safe='')}}">{{event.competition}}</a></section><h2>Choose where to sit</h2>{% if not on_sale %}<div class="empty">Tickets are not currently on sale.</div>{% endif %}<div class="cards">{% for inv in event.inventories %}<form class="area" action="/events/{{event.id}}/reserve" method="post"><input type="hidden" name="section_id" value="{{inv.section_id}}"><div><h3>{{inv.section.name}}</h3><p>{{'Choose your seats' if inv.section.mode=='assigned' else 'General admission'}} · {{availability[inv.section_id]}} available</p></div>{% if inv.section.mode=='assigned' %}<fieldset><legend>Available seats</legend>{% for row in inv.section.rows %}{% for seat in row.seats if seat.available %}<label class="seat"><input type="checkbox" name="seat_choice" value="{{seat.id}}">{{row.name}}-{{seat.number}}</label>{% endfor %}{% endfor %}</fieldset><input type="hidden" name="seat_ids"><script>document.currentScript.parentElement.addEventListener('submit',e=>{const f=e.currentTarget,s=[...f.querySelectorAll('[name=seat_choice]:checked')];f.seat_ids.value=s.map(x=>x.value).join(',');f.quantity.value=s.length})</script>{% endif %}<label>Quantity <input type="number" name="quantity" min="1" max="10" value="1"></label><button {{'disabled' if not on_sale or availability[inv.section_id]==0}}>Reserve for 10 minutes</button></form>{% endfor %}</div>{% endblock %}
+{% extends 'base.html' %}{% block content %}{% set kickoff = local_time(event.starts_at) %}
+<a href="/">← All matches</a>
+<section class="event-head">
+ <h1><a href="/clubs/{{quote(event.home_team, safe='')}}">{{event.home_team}}</a> v <a href="/clubs/{{quote(event.away_team, safe='')}}">{{event.away_team}}</a></h1>
+ <p>{{kickoff.strftime('%A %d %B %Y · %H:%M')}} · <a href="/venues/{{event.venue_id}}">{{event.venue.name}}</a></p>
+ <a class="tag" title="{{event.competition}}" href="/competitions/{{quote(event.competition, safe='')}}">{{event.competition}}</a>
+</section>
+<h2>Select your tickets</h2>
+{% if error %}<p class="form-error" role="alert">{{error}}</p>{% endif %}
+{% if not on_sale %}<div class="empty">Tickets are not currently on sale.</div>{% endif %}
+<div class="cards">
+{% for inv in event.inventories %}
+ <form class="ticket-selection" action="/events/{{event.id}}/reserve" method="post">
+  <input type="hidden" name="section_id" value="{{inv.section_id}}">
+  <h3>{{inv.section.name}}</h3><p>{{'Choose your seats' if inv.section.mode=='assigned' else 'General admission'}} · {{availability[inv.section_id]}} available</p>
+  <div class="ticket-options">
+  {% for c in event.classes %}
+   <div class="ticket-option"><div><b>{{c.name}} <span class="ticket-unit-price">£{{'%.2f'|format(c.price)}}</span></b><small>{{c.description}}{% if c.name=='VIP' %} · Date of birth required at checkout{% endif %}</small></div>
+    <input type="hidden" name="class_ids" value="{{c.id}}"><label>Quantity for {{c.name}}<input type="number" name="ticket_quantities" data-price="{{c.price}}" data-adult="{{'true' if is_adult(c) else 'false'}}" data-type="{{c.name}}" min="0" max="{{c.maximum}}" value="{{selection.get(c.id,0) if selection is not none else 1 if c.name=='Adult' else 0}}" aria-label="{{c.name}} quantity"></label>
+   </div>
+  {% endfor %}
+  </div>
+  {% if inv.section.mode=='assigned' %}
+   <fieldset><legend>Choose a seat for each ticket</legend>{% for row in inv.section.rows %}{% for seat in row.seats if seat.available %}<label class="seat"><input type="checkbox" name="seat_choice" value="{{seat.id}}">{{row.name}}-{{seat.number}}</label>{% endfor %}{% endfor %}</fieldset>
+   <input type="hidden" name="seat_ids">
+  {% endif %}
+  <div class="selection-footer"><p class="selection-total" aria-live="polite"></p><button {{'disabled' if not on_sale or availability[inv.section_id]==0 or not event.classes}}>Reserve for 10 minutes</button></div>
+  <p class="selection-note">Maximum 10 tickets per booking. Under 11 tickets must include a paying adult ticket in this booking. Any eligible VIP season-ticket discount is applied at checkout.</p>
+ </form>
+{% endfor %}
+</div><script src="/static/tickets.js" defer></script>
+{% endblock %}
