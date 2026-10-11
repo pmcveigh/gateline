@@ -1,10 +1,16 @@
 {% extends 'base.html' %}{% block main_class %}fixture-finder{% endblock %}{% block content %}
 <section class="compact-head"><div><p class="eyebrow">MATCH TICKETS</p><h1>Find your fixture</h1></div><p>Official tickets, without the fuss.</p></section>
 <section class="club-picker" aria-labelledby="club-picker-title">
- <div class="section-title"><div><p class="eyebrow">YOUR CLUB</p><h2 id="club-picker-title">Browse by club</h2></div><span>Choose a team to filter fixtures</span></div>
- <div class="club-grid">
-  <a class="club-card {{'active' if not filters.club}}" href="/?{% if filters.venue %}venue={{filters.venue}}&{% endif %}{% if filters.competition %}competition={{quote(filters.competition)}}&{% endif %}{% if filters.date %}date={{filters.date}}{% endif %}" {% if not filters.club %}aria-current="true"{% endif %}>All clubs</a>
-  {% for name in clubs %}<a class="club-card {{'active' if filters.club==name}}" href="/?club={{quote(name)}}{% if filters.venue %}&venue={{filters.venue}}{% endif %}{% if filters.competition %}&competition={{quote(filters.competition)}}{% endif %}{% if filters.date %}&date={{filters.date}}{% endif %}" {% if filters.club==name %}aria-current="true"{% endif %}>{{name}}</a>{% endfor %}
+ <div class="section-title"><h2 id="club-picker-title">Browse by club</h2><a class="club-card {{'active' if not filters.club}}" href="/?{% if filters.venue %}venue={{filters.venue}}&{% endif %}{% if filters.competition %}competition={{quote(filters.competition)}}&{% endif %}{% if filters.date %}date={{filters.date}}{% endif %}" {% if not filters.club %}aria-current="true"{% endif %}>All clubs</a></div>
+ <div class="league-list">
+ {% for league, league_clubs in club_groups %}
+  <details class="league-group" {% if filters.club in league_clubs|map(attribute='name')|list or (not filters.club and loop.first) %}open{% endif %}>
+   <summary><span>{{league}}</span><small>{{league_clubs|length}} club{{'' if league_clubs|length==1 else 's'}}</small></summary>
+   <div class="club-grid">
+   {% for item in league_clubs %}<a class="club-card {{'active' if filters.club==item.name}}" href="/?club={{quote(item.name)}}{% if filters.venue %}&venue={{filters.venue}}{% endif %}{% if filters.competition %}&competition={{quote(filters.competition)}}{% endif %}{% if filters.date %}&date={{filters.date}}{% endif %}" {% if filters.club==item.name %}aria-current="true"{% endif %}>{{item.display_name}}</a>{% endfor %}
+   </div>
+  </details>
+ {% endfor %}
  </div>
 </section>
 <form class="filters" method="get">

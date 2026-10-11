@@ -1,1 +1,6 @@
-<article class="match"><time>{{e.starts_at.strftime('%H:%M')}}</time><div><a class="tag" href="/competitions/{{quote(e.competition, safe='')}}">{{e.competition}}</a><h3><a href="/events/{{e.id}}">{{e.title}}</a></h3><p><a href="/clubs/{{quote(e.home_team, safe='')}}">{{e.home_team}}</a> vs <a href="/clubs/{{quote(e.away_team, safe='')}}">{{e.away_team}}</a> · <a href="/venues/{{e.venue_id}}">{{e.venue.name}}</a></p></div><a class="button" href="/events/{{e.id}}">Tickets</a></article>
+<article class="match">
+ <time>{{e.starts_at.strftime('%H:%M')}}</time>
+ <div class="match-info"><h3><a href="/events/{{e.id}}">{{e.title}}</a></h3><p><a href="/venues/{{e.venue_id}}">{{e.venue.name}}</a></p></div>
+ <a class="button" href="/events/{{e.id}}" aria-label="Tickets for {{e.title}}">Tickets</a>
+ <a class="tag match-competition" href="/competitions/{{quote(e.competition, safe='')}}" title="{{e.competition}}">{{e.competition}}</a>
+</article>

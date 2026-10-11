@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 from . import __version__
 from .auth import require, verify
+from .clubs import build_club_groups, find_club
 from .database import Base, engine, get_db, upgrade_schema
 from .models import *
 from .services import checkout, reserve, scan_ticket
@@ -69,7 +70,10 @@ def build_calendar(events):
 @app.get("/",response_class=HTMLResponse)
 def home(request:Request,club:str="",venue:OptionalVenueId=None,competition:str="",date:str="",db:Session=Depends(get_db)):
     query=select(Event).where(Event.published==True,Event.cancelled==False,Event.starts_at>=datetime.now(timezone.utc))
-    if club: query=query.where(or_(Event.home_team==club,Event.away_team==club))
+    directory_club=find_club(club)
+    if club:
+        names=directory_club.filter_names if directory_club else (club,)
+        query=query.where(or_(Event.home_team.in_(names),Event.away_team.in_(names)))
     if venue: query=query.where(Event.venue_id==venue)
     if competition: query=query.where(Event.competition==competition)
     events=db.scalars(query.order_by(Event.starts_at)).all()
@@ -78,13 +82,15 @@ def home(request:Request,club:str="",venue:OptionalVenueId=None,competition:str=
     venues=db.scalars(select(Venue).join(Event).where(Event.published==True).distinct().order_by(Venue.name)).all()
     competitions=db.scalars(select(Event.competition).where(Event.published==True).distinct().order_by(Event.competition)).all()
     calendar=build_calendar(events)
-    return render(request,"home.html",events=events,calendar=calendar,clubs=clubs,venues=venues,competitions=competitions,filters={"club":club,"venue":venue,"competition":competition,"date":date})
+    return render(request,"home.html",events=events,calendar=calendar,club_groups=build_club_groups(clubs),venues=venues,competitions=competitions,filters={"club":directory_club.name if directory_club else club,"venue":venue,"competition":competition,"date":date})
 @app.get("/clubs/{name}",response_class=HTMLResponse)
 def club_profile(name:str,request:Request,db:Session=Depends(get_db)):
-    events=db.scalars(select(Event).where(Event.published==True,or_(Event.home_team==name,Event.away_team==name)).order_by(Event.starts_at)).all()
-    club=db.scalar(select(Club).where(or_(Club.name==name,Club.short_name==name)))
-    if not club and not events: raise HTTPException(404,"Club not found")
-    return render(request,"profile.html",kind="Club",name=club.name if club else name,subtitle=club.address if club else None,events=events)
+    directory_club=find_club(name)
+    names=directory_club.filter_names if directory_club else (name,)
+    events=db.scalars(select(Event).where(Event.published==True,or_(Event.home_team.in_(names),Event.away_team.in_(names))).order_by(Event.starts_at)).all()
+    club=db.scalar(select(Club).where(or_(Club.name.in_(names),Club.short_name.in_(names))))
+    if not directory_club and not club and not events: raise HTTPException(404,"Club not found")
+    return render(request,"profile.html",kind="Club",name=directory_club.display_name if directory_club else club.name if club else name,subtitle=f"{directory_club.stadium} · {directory_club.location}" if directory_club else club.address if club else None,directory_club=directory_club,events=events)
 @app.get("/venues/{venue_id}",response_class=HTMLResponse)
 def venue_profile(venue_id:int,request:Request,db:Session=Depends(get_db)):
     venue=db.get(Venue,venue_id)
