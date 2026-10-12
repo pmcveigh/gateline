@@ -20,12 +20,13 @@ After seeding the database, open [http://127.0.0.1:8000/login](http://127.0.0.1:
 | --- | --- | --- | --- |
 | Administrator | `admin@gateline.test` | `Admin123!` | Event dashboard, attendance, ticket search and cancellation |
 | Gate operator | `gate@gateline.test` | `Gate123!` | Gate 1 ticket scanner |
+| Away gate operator | `awaygate@gateline.test` | `AwayGate123!` | Gate 2 scanner for City End / Railway Stand |
 
 These credentials are created by `scripts/seed.py` and must not be used in production.
 
 ### Other demo data
 * Priority numbers: `ST001234`, `ST005678`
-* 36 sample home fixtures across the 2026/27 NIFL Premiership and Championship,
+* 36 sample league home fixtures plus Glentoran v Linfield in the NIFL League Cup across the 2026/27 NIFL Premiership and Championship,
   and the 2026 NIFL Women's Premiership
 * All 36 clubs and their 28 home stadiums, including grounds shared across teams
 
@@ -77,42 +78,77 @@ a date of birth for an attendee under 11. Eligibility is checked on the server.
 
 ### Supporter portal
 Open `/register` to create an account, or `/account/login` to sign in with a
-username or email. Accounts have a required date of birth and multiple followed
-clubs. `/account` puts followed clubs first, shows availability notifications for
-matches without valid tickets or season coverage, and lists bookings, sections,
-distinct matches bought, active season tickets and matches actually attended.
-Only new authenticated bookings belong to that account; matching a guest order's
-email does not grant access. Mark one attendee as **This is my ticket** so their
-saved age and access preferences apply and gate scans count personal attendance.
-Guest attendees have separate eligibility details and never inflate the buyer's
-attendance count. Ordinary Adult tickets remain purchasable at any age.
+username or email. The default **Your Matches** dashboard (`/account`) shows
+notifications first, then matches for followed clubs, existing bookings and season
+entitlements, with all other fixtures below. **Profile** (`/account/profile`) holds
+stats, season passes and section choices. All editable preferences, accessibility,
+contact/address details and password changes are together in **Settings**
+(`/account/settings`). **Your Tickets** (`/account/tickets`) opens bought and claimed
+match tickets for printing; **History** (`/account/history`) lists successful/failed
+bookings, claims and actual gate admissions. Email/password changes require the
+current password. Matching a guest order's email never grants account ownership.
 
-Concession defaults are strictly **under 16 or over 65**, evaluated on match day,
-with editable club limits. The profile's **Force concession due to disability**
-option permits concessions regardless of age. Dedicated disabled/accessibility
-types appear first, then eligible concessions; Adult and other available tickets
-remain selectable if a discounted option is unavailable. Optional disability type
-and access details are shown to administrators of relevant matches only when the
-supporter opts into sharing. Revoking consent immediately removes them from those
-dashboards. Bookings for guests do not share the account holder's access needs.
+Mark one paid-booking attendee as **This is my ticket** so their saved age and access
+preferences apply. Guest eligibility details are separate and guest scans do not
+inflate the buyer's attendance count. Ordinary Adult tickets remain purchasable at
+any age. Concession defaults are strictly **under 16 or over 65** on match day,
+with editable club limits. **Force concession due to disability** is in Settings.
+Dedicated Disabled/accessibility types appear first, then eligible concessions;
+Adult and other types remain selectable if a discount is unavailable. Optional
+disability/access details appear to relevant match administrators only with explicit,
+revocable consent. Unclaimed cup entitlements do not share access needs as attendance.
 
-The requested test identity is created once on startup and by the demo seed:
-`philmcveigh` / `password123!`, Phil McVeigh, `phil.mcveigh@gateline.com`, born
-17 March 1992, following Glentoran. The Glentoran season-ticket register contains
-**12345**, **Sydenham End**, **Adult**, linked to this account. Its initial validity
-is the current July–June season for home NIFL Premiership fixtures; cup and away
-matches require separate tickets. Existing profile/password changes are preserved.
-The account includes a printable season pass with its own QR code, and gate staff
-can scan it or type the club-scoped season number. A unique supporter/fixture
-attendance record prevents duplicate admission using a personal ticket and pass.
-Season-pass admissions are reported separately from the existing ticket-stock
-statistics; no stadium inventory allocation is inferred from a season section.
-Administrators can open a club's **Season-ticket register** from its pricing page.
+### Glentoran v Linfield — NIFL League Cup
+Startup and demo seeding add this fixture once at **The Oval**. The demonstration
+kick-off is 15:00 Europe/London on the Saturday three weeks after the next/current
+Saturday when first created (7 November 2026 if initialised on 12 October 2026).
+Restarting does not change its date, prices, allocation or existing bookings.
 
-The additive portal schema migration is applied on startup. Operators managing
-SQL manually can use `migrations/004_supporter_portal.sql`; the application then
-initialises menus and the test record. This is a demo identity with the supplied
-password, so disable it or change its password before any production deployment.
+Home season-ticket holders **must claim a match ticket**, even though it costs £0.
+The registered section and ticket type determine the claim: Phil's ticket is
+**Adult / Sydenham End**, never VIP or an away section. One claim is allowed per
+season ticket per fixture; repeat requests return the existing ticket. Cancelled
+claims require the club to arrange a replacement. Claims consume section inventory,
+produce an individual protected QR ticket and require no payment or billing address.
+Claimed matches have their own profile count rather than inflating paid-match stats.
+Scan the **claimed match ticket**, not the season pass, for this cup fixture.
+League fixtures retain their existing season-pass admission behavior.
+
+Away fans sign in and verify an active, account-owned **Linfield** season-ticket
+number to unlock the Glentoran away model: **Adult £15**, **Concession £8** and
+**Disabled £8**. Away areas are **City End** (general admission) and **Railway Stand**
+(assigned seating). Away access and section/class allocation are checked both when
+reserving and at checkout. Home numbers and legacy priority identifiers cannot
+unlock away tickets. Away prices stay separate from the home club menu.
+
+**Disabled tickets cost £8 for home and away fans. Away Disabled seating at The Oval
+is in the home section, Lower Grandstand.** Both use the same physical inventory,
+so their capacity is shared; away standard tickets cannot be booked there. The
+fixture uses sample allocations and unreserved Lower Grandstand seating for this
+demo; these capacities do not represent audited stadium inventory.
+
+### Test accounts, season-ticket and voucher numbers
+The following demonstration identities and numbers are created idempotently.
+Existing password/profile changes, code usage and season validity are preserved.
+They are also shown as text at the bottom of relevant app screens (match booking,
+checkout, sign-in, profile/settings, ticket/history and season-ticket windows).
+
+| Test item | Number / code | Details |
+| --- | --- | --- |
+| Glentoran season ticket | `12345` | Phil McVeigh, `phil.mcveigh@gateline.com`, born 17 March 1992; Adult, Sydenham End. Login `philmcveigh` / `password123!`. Free home League Cup claim and own £50 VIP pricing. |
+| Linfield season ticket | `LF12345` | Linfield Test Fan, `linfield.fan@gateline.test`, born 1 January 1990; Adult, South Stand Half Way Line. Login `linfieldfan` / `Linfield123!`. Unlocks paid away tickets for the cup fixture. |
+| Legacy priority identifier | `ST001234` | 2 uses; does not unlock away access or free cup claims. |
+| Legacy priority identifier | `ST005678` | 1 use; does not unlock away access or free cup claims. |
+| Test voucher | `DEMO10` | 10% off paid test bookings, up to 100 uses, valid until the current July–June season ends. Free claims remain £0 and do not consume vouchers. |
+
+Initial season-ticket validity is the current July–June season. Administrative
+registers are under `/admin/clubs/{club}/season-tickets`. Printable season passes
+have protected QR codes. A per-supporter/per-fixture admission record prevents
+entering twice via personal tickets and season entitlements. The original portal
+migration is `migrations/004_supporter_portal.sql`; the additional claim/audience
+schema is `migrations/005_cup_claims_and_away_allocations.sql`. Both are applied
+additively on startup. The supplied passwords and visibly listed codes are for
+demo testing; remove/change them before production use.
 
 Selections and the existing reservation deadline persist across checkout reloads
 and validation errors. The countdown disables payment when time runs out; the

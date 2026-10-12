@@ -93,7 +93,7 @@ def ensure_test_supporter(db):
         user=User(username="philmcveigh",name="Phil McVeigh",email="phil.mcveigh@gateline.com",password_hash=hash_password("password123!"),role="supporter")
         db.add(user);db.flush()
         db.add(SupporterProfile(user_id=user.id,birth_date=date(1992,3,17),clubs_json=json.dumps(["Glentoran"])))
-    elif user.role!="supporter" or user.email.casefold()!="phil.mcveigh@gateline.com":
+    elif user.role!="supporter":
         raise ValueError("The test username belongs to a different identity")
     profile_for(db,user)
     membership=db.scalar(select(SeasonTicket).where(SeasonTicket.club_name==club_key("Glentoran"),SeasonTicket.number=="12345"))
@@ -162,10 +162,12 @@ def validate_attendees(event,lines,profile,personal_index,birth_dates,disability
 
 
 def dashboard_data(db,user):
+    from .allocations import claim_memberships, claim_target, valid_membership
     profile=profile_for(db,user);interests={club_key(name) for name in json.loads(profile.clubs_json)}
     orders=db.scalars(select(Order).where(Order.supporter_id==user.id).options(selectinload(Order.tickets)).order_by(Order.created_at.desc())).all()
     successful=[order for order in orders if order.payment_status=="successful"]
-    purchased={order.event_id for order in successful}
+    purchased={order.event_id for order in successful if any(ticket.season_ticket_id is None for ticket in order.tickets)}
+    claimed={ticket.event_id for order in successful for ticket in order.tickets if ticket.season_ticket_id and ticket.status in ('sold','scanned')}
     valid={ticket.event_id for order in successful for ticket in order.tickets if ticket.status in ("sold","scanned")}
     memberships=active_memberships(db,user)
     admissions=db.scalars(select(SupporterAttendance).where(SupporterAttendance.user_id==user.id)).all()
@@ -174,27 +176,42 @@ def dashboard_data(db,user):
     events=db.scalars(select(Event).where(Event.published==True,Event.cancelled==False,Event.archived==False,Event.starts_at>=datetime.now(timezone.utc)).options(selectinload(Event.classes))).all()
     fav=lambda event: club_key(event.home_team) in interests or club_key(event.away_team) in interests
     events.sort(key=lambda event:(not fav(event),event.starts_at,event.id))
-    notices=[];covered={event.id for event in events if any(covers_event(st,event) for st in memberships)}
+    notices=[];covered={event.id for event in events if not event.season_claim_required and any(covers_event(st,event) for st in memberships)}
+    previous_claims={ticket.event_id for order in successful for ticket in order.tickets if ticket.season_ticket_id}
+    claimable={}
+    for event in events:
+        if event.id in previous_claims: continue
+        eligible=claim_memberships(db,event,user)
+        if eligible: claimable[event.id]=eligible
     now=datetime.now(timezone.utc)
     for event in events:
-        if not fav(event) or event.id in valid or event.id in covered or event.sales_suspended or not any(tc.maximum>0 for tc in offered_classes(event)): continue
+        if not (fav(event) or event.id in claimable) or event.id in valid or event.id in covered or event.sales_suspended or not any(tc.maximum>0 for tc in offered_classes(event)): continue
         opening=event.sales_open.replace(tzinfo=timezone.utc) if event.sales_open.tzinfo is None else event.sales_open
         closing=event.sales_close.replace(tzinfo=timezone.utc) if event.sales_close.tzinfo is None else event.sales_close
         if not opening<=now<=closing: continue
-        for inv in event.inventories:
+        inventories=[inv for inv in event.inventories if inv.audience=='home' or any(valid_membership(st,event,event.away_team) for st in memberships)]
+        if event.id in claimable:
+            inventories=[]
+            for st in claimable[event.id]:
+                try: inv,_=claim_target(event,st);inventories.append(inv)
+                except ValueError: continue
+        for inv in inventories:
             sold=db.scalar(select(func.count(Ticket.id)).where(Ticket.event_id==event.id,Ticket.section_id==inv.section_id,Ticket.status.in_(["sold","scanned"]))) or 0
             held=db.scalar(select(func.coalesce(func.sum(Reservation.quantity),0)).where(Reservation.event_id==event.id,Reservation.section_id==inv.section_id,Reservation.completed==False,Reservation.expires_at>now)) or 0
             if sold+held<inv.capacity-inv.held:
                 notices.append(event);break
     areas=Counter((ticket.section.name,ticket.ticket_class.name) for order in successful for ticket in order.tickets if ticket.status in ("sold","scanned"))
-    return dict(profile=profile,orders=orders,events=events,notices=notices,memberships=memberships,season_attendance=season_attendance,purchased=purchased,attended=attended,covered=covered,areas=areas,interests=interests)
+    personal_events=[event for event in events if fav(event) or event.id in valid or event.id in covered or event.id in claimable]
+    other_events=[event for event in events if event not in personal_events]
+    attendance_history=[(admission,db.get(Event,admission.event_id)) for admission in sorted(admissions,key=lambda row:row.scanned_at,reverse=True)]
+    return dict(profile=profile,orders=orders,events=events,personal_events=personal_events,other_events=other_events,notices=notices,memberships=memberships,season_attendance=season_attendance,purchased=purchased,claimed=claimed,claimable=claimable,valid_bookings=valid,attendance_history=attendance_history,attended=attended,covered=covered,areas=areas,interests=interests)
 
 
 def access_needs_for_event(db,event):
     tickets=db.scalars(select(Ticket).where(Ticket.event_id==event.id,Ticket.status.in_(["sold","scanned"]),Ticket.attendee_user_id.is_not(None))).all()
     people={ticket.attendee_user_id for ticket in tickets}
     for membership in db.scalars(select(SeasonTicket).where(SeasonTicket.active==True)):
-        if covers_event(membership,event): people.add(membership.user_id)
+        if not event.season_claim_required and covers_event(membership,event): people.add(membership.user_id)
     result=[]
     for user_id in sorted(people):
         user=db.get(User,user_id);profile=db.get(SupporterProfile,user_id)
@@ -208,6 +225,8 @@ def scan_season_ticket(db,token,event_id,operator):
     if not event: return {"result":"WRONG FIXTURE","detail":"Select a valid fixture"}
     membership=db.scalar(select(SeasonTicket).where((SeasonTicket.qr_token==token)|((SeasonTicket.number==token)&(SeasonTicket.club_name==club_key(event.home_team)))))
     if not membership: return {"result":"INVALID","detail":"Ticket not recognised"}
+    if event.season_claim_required:
+        return {"result":"CLAIM REQUIRED","detail":"Claim your match ticket and scan its QR code. A season pass alone does not admit you to this fixture."}
     if not covers_event(membership,event) or event.cancelled or not event.published: return {"result":"WRONG FIXTURE","detail":"Season ticket does not cover this fixture"}
     if db.scalar(select(SupporterAttendance).where(SupporterAttendance.user_id==membership.user_id,SupporterAttendance.event_id==event_id)):
         return {"result":"ALREADY USED","detail":"Supporter has already entered this fixture"}

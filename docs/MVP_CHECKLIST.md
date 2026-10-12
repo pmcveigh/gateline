@@ -28,3 +28,14 @@ match tickets share a per-supporter/per-fixture admission guard. Password recove
 email verification, season-ticket renewal/admin editing and physical proof of age
 or disability are outside this demo portal; eligibility uses declared profile and
 guest details. Season-pass admissions are separate from ticket-stock allocation.
+
+## Match dashboard, cup claims and away allocation
+
+Your Matches, Profile, consolidated Settings, Your Tickets and History have
+separate supporter pages. Free cup claims preserve the official season category
+and section, consume match inventory and have a unique season-ticket/fixture
+constraint. Cup admission uses the claimed ticket QR. Away reservations verify
+an account-owned away-club season ticket and revalidate it at checkout. Railway
+Stand uses assigned seats; home and away Disabled tickets share the home Lower
+Grandstand's physical capacity. Test numbers are documented and displayed at the
+bottom of the relevant screens. Fixture capacities are demo allocations.

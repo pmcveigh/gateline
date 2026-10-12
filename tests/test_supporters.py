@@ -89,7 +89,7 @@ def test_dashboard_favourites_notifications_and_season_coverage(portal):
     assert 'Tickets available: Glentoran v Visitors' in page.text
     assert 'Covered by season ticket' in page.text
     assert 'Tickets available: Linfield' not in page.text
-    assert '12345' in page.text and client.get('/account/season-tickets/1/qr.png').headers['content-type']=='image/png'
+    assert '12345' in client.get('/account/profile').text and client.get('/account/season-tickets/1/qr.png').headers['content-type']=='image/png'
     assert '1992-03-17' in client.get('/account/profile').text
     assert client.get('/admin/clubs/Glentoran/season-tickets').status_code==403
     client.post('/logout');client.post('/login',data={'email':'admin@test.test','password':'Test123!'})
