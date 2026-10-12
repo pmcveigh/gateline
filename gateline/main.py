@@ -22,6 +22,8 @@ from .models import *
 from .services import checkout, reserve, reservation_rows, scan_ticket
 from .supporters import access_needs_for_event, active_memberships, ensure_test_supporter, preferred_classes, profile_for, restriction
 from .accounts import install_accounts
+from .admin_management import install_management
+from .management import check_club, check_event, club_record, event_scope, initialise_management, require_manager
 from .allocations import claim_memberships, claim_season_ticket, claim_target, classes_for_inventory, verify_away_membership
 from .demo import DEMO_CODES, ensure_demo_data
 from .ticketing import canonical_club, club_key, configure_club_tickets, is_adult, menu_for_club, minimum_adult_price, offered_classes, save_club_pricing, selected_classes, upgrade_club_tickets, VIP_MIN_AGE
@@ -36,6 +38,7 @@ def startup():
     with Session(engine) as db:
         upgrade_club_tickets(db)
         ensure_demo_data(db)
+        initialise_management(db)
     LOG_DIR.mkdir(parents=True,exist_ok=True)
 @app.middleware("http")
 async def load_user(request,call_next):
@@ -62,6 +65,7 @@ app.add_middleware(SessionMiddleware,secret_key=__import__('os').getenv("SECRET_
 def render(request,template_name,status_code=200,**ctx): return templates.TemplateResponse(request,template_name,{"user":request.state.user,"version":__version__,"demo_codes":DEMO_CODES,"quote":quote,"minimum_adult_price":minimum_adult_price,"local_time":local_time,"filter_url":fixture_filter_url,"offered_classes":offered_classes,**ctx},status_code=status_code)
 
 install_accounts(app,render)
+install_management(app,render)
 
 OptionalVenueId=Annotated[int|None,BeforeValidator(lambda value: None if value=="" else value)]
 
@@ -107,7 +111,7 @@ def club_profile(name:str,request:Request,db:Session=Depends(get_db)):
     events=db.scalars(select(Event).options(selectinload(Event.classes)).where(Event.published==True,or_(Event.home_team.in_(names),Event.away_team.in_(names))).order_by(Event.starts_at)).all()
     club=db.scalar(select(Club).where(or_(Club.name.in_(names),Club.short_name.in_(names))))
     if not directory_club and not club and not events: raise HTTPException(404,"Club not found")
-    return render(request,"profile.html",kind="Club",name=directory_club.display_name if directory_club else club.name if club else name,subtitle=f"{directory_club.stadium} · {directory_club.location}" if directory_club else club.address if club else None,directory_club=directory_club,events=events)
+    return render(request,"profile.html",kind="Club",name=directory_club.display_name if directory_club else club.name if club else name,subtitle=f"{directory_club.stadium} · {directory_club.location}" if directory_club else club.address if club else None,directory_club=directory_club,season_products=db.scalars(select(SeasonProduct).where(SeasonProduct.club_name==club_key(name),SeasonProduct.enabled==True)).all(),events=events)
 @app.get("/venues/{venue_id}",response_class=HTMLResponse)
 def venue_profile(venue_id:int,request:Request,db:Session=Depends(get_db)):
     venue=db.get(Venue,venue_id)
@@ -244,33 +248,43 @@ def qr(public_id:str,request:Request,access:str="",db:Session=Depends(get_db)):
 
 def owns_order(request,order):
     user=request.state.user
-    return bool(user and (user.role=="admin" or (user.role=="supporter" and order.supporter_id==user.id)))
+    return bool(user and (user.role=="admin" or (user.role=="club_admin" and user.managed_club==(order.event.owner_club or club_key(order.event.home_team))) or (user.role=="supporter" and order.supporter_id==user.id)))
 
 @app.get("/login",response_class=HTMLResponse)
 def login_page(request:Request):return render(request,"login.html")
 @app.post("/login")
 def login(request:Request,email:str=Form(),password:str=Form(),db:Session=Depends(get_db)):
-    user=db.scalar(select(User).where(User.email==email.lower()))
-    if not user or not verify(password,user.password_hash):raise HTTPException(401,"Incorrect credentials")
-    request.session.clear();request.session["user_id"]=user.id; db.add(AuditLog(user_id=user.id,action="user.login",entity="user",entity_id=str(user.id))); db.commit(); return RedirectResponse("/admin" if user.role=="admin" else "/account" if user.role=="supporter" else "/gate",303)
+    identity=email.strip().casefold()
+    user=db.scalar(select(User).where(or_(func.lower(User.email)==identity,User.username==identity)))
+    if len(password.encode())>72 or not user or not verify(password,user.password_hash):raise HTTPException(401,"Incorrect credentials")
+    request.session.clear();request.session["user_id"]=user.id; db.add(AuditLog(user_id=user.id,action="user.login",entity="user",entity_id=str(user.id))); db.commit(); return RedirectResponse("/admin" if user.role=="admin" else f"/admin/clubs/{quote(user.managed_club,safe='')}" if user.role=="club_admin" else "/account" if user.role=="supporter" else "/gate",303)
 @app.post("/logout")
 def logout(request:Request):request.session.clear();return RedirectResponse("/",303)
 @app.get("/admin",response_class=HTMLResponse)
-def admin(request:Request,user=Depends(require("admin")),db:Session=Depends(get_db)):
-    events=db.scalars(select(Event).order_by(Event.starts_at)).all(); return render(request,"admin.html",events=events,venues=db.scalars(select(Venue).order_by(Venue.name)).all())
+def admin(request:Request,q:str="",club:str="",user=Depends(require_manager),db:Session=Depends(get_db)):
+    query=select(Event).join(Venue).where(event_scope(user))
+    if club:
+        check_club(user,club);query=query.where(event_scope(user,club))
+    if q: query=query.where(or_(Event.title.ilike(f"%{q}%"),Event.competition.ilike(f"%{q}%"),Venue.name.ilike(f"%{q}%")))
+    events=db.scalars(query.order_by(Event.starts_at)).all()
+    return render(request,"admin.html",events=events,q=q,club_filter=club,venues=db.scalars(select(Venue).order_by(Venue.name)).all())
 @app.get("/admin/clubs",response_class=HTMLResponse)
-def club_pricing_index(request:Request,user=Depends(require("admin")),db:Session=Depends(get_db)):
+def club_pricing_index(request:Request,user=Depends(require_manager),db:Session=Depends(get_db)):
     names={entry.name for clubs in LEAGUES.values() for entry in clubs}
     names.update(db.scalars(select(Event.home_team).distinct()).all())
     by_key={club_key(name):name for name in sorted(names,reverse=True)}
-    return render(request,"club_pricing_index.html",clubs=sorted(by_key.values()))
+    clubs=[name for name in sorted(by_key.values()) if user.role=='admin' or club_key(name)==user.managed_club]
+    clubs.extend(row.name for row in db.scalars(select(ClubManagement)) if row.name not in clubs and (user.role=='admin' or row.club_name==user.managed_club))
+    return render(request,"club_pricing_index.html",clubs=sorted(set(clubs)))
 
 @app.get("/admin/clubs/{name}/pricing",response_class=HTMLResponse)
-def club_pricing_page(name:str,request:Request,user=Depends(require("admin")),db:Session=Depends(get_db)):
-    return render(request,"club_pricing.html",name=name,menu=menu_for_club(db,name))
+def club_pricing_page(name:str,request:Request,user=Depends(require_manager),db:Session=Depends(get_db)):
+    check_club(user,name)
+    return render(request,"club_pricing.html",name=name,club=club_record(db,name),menu=menu_for_club(db,name))
 
 @app.post("/admin/clubs/{name}/pricing",response_class=HTMLResponse)
-def update_club_pricing(name:str,request:Request,ticket_names:list[str]=Form([]),ticket_prices:list[str]=Form([]),ticket_descriptions:list[str]=Form([]),ticket_categories:list[str]=Form([]),concession_under:list[str]=Form([]),concession_over:list[str]=Form([]),user=Depends(require("admin")),db:Session=Depends(get_db)):
+def update_club_pricing(name:str,request:Request,ticket_names:list[str]=Form([]),ticket_prices:list[str]=Form([]),ticket_descriptions:list[str]=Form([]),ticket_categories:list[str]=Form([]),concession_under:list[str]=Form([]),concession_over:list[str]=Form([]),user=Depends(require_manager),db:Session=Depends(get_db)):
+    check_club(user,name)
     try:
         save_club_pricing(db,name,ticket_names,ticket_prices,ticket_descriptions,ticket_categories,concession_under or None,concession_over or None)
     except ValueError as error:
@@ -280,30 +294,35 @@ def update_club_pricing(name:str,request:Request,ticket_names:list[str]=Form([])
     return RedirectResponse(f"/admin/clubs/{quote(name,safe='')}/pricing?saved=1",303)
 
 @app.get("/admin/events/new",response_class=HTMLResponse)
-def new_event(request:Request,user=Depends(require("admin")),db:Session=Depends(get_db)):
-    return render(request,"event_admin.html",event=None,venues=db.scalars(select(Venue).order_by(Venue.name)).all())
+def new_event(request:Request,club:str="",user=Depends(require_manager),db:Session=Depends(get_db)):
+    name=club or user.managed_club or ''
+    if name: check_club(user,name)
+    record=club_record(db,name) if name else None
+    return render(request,"event_admin.html",event=None,home_club=record,venues=db.scalars(select(Venue).order_by(Venue.name)).all())
 @app.post("/admin/events")
-def create_event(request:Request,title:str=Form(),home_team:str=Form(),away_team:str=Form(),competition:str=Form(),venue_id:int=Form(),starts_at:datetime=Form(),sales_open:datetime=Form(),sales_close:datetime=Form(),user=Depends(require("admin")),db:Session=Depends(get_db)):
+def create_event(request:Request,title:str=Form(),home_team:str=Form(),away_team:str=Form(),competition:str=Form(),venue_id:int=Form(),starts_at:datetime=Form(),sales_open:datetime=Form(),sales_close:datetime=Form(),user=Depends(require_manager),db:Session=Depends(get_db)):
+    check_club(user,home_team)
     venue=db.get(Venue,venue_id)
     if not venue or sales_open>=sales_close or sales_close>starts_at: raise HTTPException(422,"Check venue and dates")
     london=ZoneInfo("Europe/London"); to_utc=lambda value:(value.replace(tzinfo=london) if value.tzinfo is None else value).astimezone(timezone.utc)
     home_entry=canonical_club(home_team);away_entry=canonical_club(away_team)
     home_team=home_entry.name if home_entry else home_team.strip();away_team=away_entry.name if away_entry else away_team.strip()
     if not home_team or len(home_team)>150 or not away_team or len(away_team)>150: raise HTTPException(422,"Enter valid club names")
-    event=Event(title=title.strip(),home_team=home_team,away_team=away_team,competition=competition.strip(),venue_id=venue_id,starts_at=to_utc(starts_at),sales_open=to_utc(sales_open),sales_close=to_utc(sales_close),published=False);db.add(event);db.flush()
+    record=club_record(db,home_team)
+    event=Event(owner_club=record.club_name,title=title.strip(),home_team=home_team,away_team=away_team,competition=competition.strip(),venue_id=venue_id,starts_at=to_utc(starts_at),sales_open=to_utc(sales_open),sales_close=to_utc(sales_close),published=False);db.add(event);db.flush()
     for stand in venue.stands:
         for section in stand.sections: db.add(EventInventory(event_id=event.id,section_id=section.id,capacity=section.capacity))
     configure_club_tickets(db,event)
     db.add(AuditLog(user_id=user.id,action="event.created",entity="event",entity_id=str(event.id)));db.commit();return RedirectResponse(f"/admin/events/{event.id}",303)
 @app.get("/admin/events/{event_id}",response_class=HTMLResponse)
-def admin_event(event_id:int,request:Request,user=Depends(require("admin")),db:Session=Depends(get_db)):
+def admin_event(event_id:int,request:Request,user=Depends(require_manager),db:Session=Depends(get_db)):
     event=db.get(Event,event_id)
-    if not event: raise HTTPException(404)
+    check_event(user,event)
     return render(request,"event_admin.html",event=event,venues=db.scalars(select(Venue).order_by(Venue.name)).all())
 @app.post("/admin/events/{event_id}/state")
-def event_state(event_id:int,request:Request,action:str=Form(),reason:str=Form(""),user=Depends(require("admin")),db:Session=Depends(get_db)):
+def event_state(event_id:int,request:Request,action:str=Form(),reason:str=Form(""),user=Depends(require_manager),db:Session=Depends(get_db)):
     event=db.get(Event,event_id)
-    if not event: raise HTTPException(404)
+    check_event(user,event)
     if action=="publish":
         if not event.inventories or not offered_classes(event): raise HTTPException(409,"Configure inventory and ticket classes before publishing")
         event.published=True
@@ -315,15 +334,15 @@ def event_state(event_id:int,request:Request,action:str=Form(),reason:str=Form("
     else: raise HTTPException(422,"Unknown fixture action")
     db.add(AuditLog(user_id=user.id,action=f"event.{action}:{reason[:200]}",entity="event",entity_id=str(event.id)));db.commit();return RedirectResponse(f"/admin/events/{event.id}",303)
 @app.post("/admin/events/{event_id}/publish")
-def publish(event_id:int,request:Request,user=Depends(require("admin")),db:Session=Depends(get_db)):
+def publish(event_id:int,request:Request,user=Depends(require_manager),db:Session=Depends(get_db)):
     e=db.get(Event,event_id)
-    if not e: raise HTTPException(404)
+    check_event(user,e)
     if not e.published and (not e.inventories or not offered_classes(e)): raise HTTPException(409,"Configure inventory and club pricing before publishing")
     e.published=not e.published;db.add(AuditLog(user_id=user.id,action="event.published" if e.published else "event.unpublished",entity="event",entity_id=str(e.id)));db.commit();return RedirectResponse("/admin",303)
 @app.get("/admin/events/{event_id}/attendance",response_class=HTMLResponse)
-def attendance(event_id:int,request:Request,user=Depends(require("admin")),db:Session=Depends(get_db)):
+def attendance(event_id:int,request:Request,user=Depends(require_manager),db:Session=Depends(get_db)):
     event=db.get(Event,event_id)
-    if not event: raise HTTPException(404)
+    check_event(user,event)
     tickets=db.scalars(select(Ticket).where(Ticket.event_id==event_id)).all(); capacity=db.scalar(select(func.sum(EventInventory.capacity-EventInventory.held)).where(EventInventory.event_id==event_id)) or 0
     now=datetime.now(timezone.utc); reserved=db.scalar(select(func.coalesce(func.sum(Reservation.quantity),0)).where(Reservation.event_id==event_id,Reservation.completed==False,Reservation.expires_at>now)) or 0
     valid=[t for t in tickets if t.status in ("sold","scanned")]; scanned=sum(t.status=="scanned" for t in valid); cancelled=sum(t.status in ("cancelled","refunded") for t in tickets)
@@ -332,17 +351,28 @@ def attendance(event_id:int,request:Request,user=Depends(require("admin")),db:Se
     season_admissions=db.scalar(select(func.count(SupporterAttendance.id)).where(SupporterAttendance.event_id==event_id,SupporterAttendance.season_ticket_id.is_not(None))) or 0
     return render(request,"attendance.html",event=event,tickets=tickets,capacity=capacity,stats=stats,updated=now,access_needs=access_needs_for_event(db,event),season_admissions=season_admissions)
 @app.post("/admin/tickets/{ticket_id}/cancel")
-def cancel(ticket_id:int,request:Request,reason:str=Form(""),user=Depends(require("admin")),db:Session=Depends(get_db)):
+def cancel(ticket_id:int,request:Request,reason:str=Form(""),user=Depends(require_manager),db:Session=Depends(get_db)):
     t=db.get(Ticket,ticket_id)
     if not t: raise HTTPException(404)
+    check_event(user,db.get(Event,t.event_id))
     if t.status not in ("cancelled","refunded"):
         t.status="cancelled";t.cancelled_at=datetime.now(timezone.utc);t.cancelled_by=user.id;t.cancellation_reason=reason[:500];db.add(AuditLog(user_id=user.id,action="ticket.cancelled",entity="ticket",entity_id=str(t.id)));db.commit()
     return RedirectResponse(f"/admin/events/{t.event_id}/attendance",303)
 @app.get("/admin/search",response_class=HTMLResponse)
-def search(request:Request,q:str="",user=Depends(require("admin")),db:Session=Depends(get_db)):
-    orders=db.scalars(select(Order).join(Customer).where(or_(Order.reference.ilike(f"%{q}%"),Customer.full_name.ilike(f"%{q}%"),Customer.email.ilike(f"%{q}%")))).all() if q else []; tickets=db.scalars(select(Ticket).where(Ticket.public_id.ilike(f"%{q}%"))).all() if q else [];return render(request,"search.html",q=q,orders=orders,tickets=tickets)
+def search(request:Request,q:str="",user=Depends(require_manager),db:Session=Depends(get_db)):
+    orders=db.scalars(select(Order).join(Customer).join(Event).where(event_scope(user)).where(or_(Order.reference.ilike(f"%{q}%"),Customer.full_name.ilike(f"%{q}%"),Customer.email.ilike(f"%{q}%")))).all() if q else []
+    tickets=db.scalars(select(Ticket).join(Event).where(event_scope(user)).where(Ticket.public_id.ilike(f"%{q}%"))).all() if q else []
+    holders_query=select(SeasonTicket)
+    purchase_query=select(SeasonPurchase).join(SeasonProduct).join(User,SeasonPurchase.user_id==User.id)
+    if user.role=='club_admin':
+        holders_query=holders_query.where(SeasonTicket.club_name==user.managed_club)
+        purchase_query=purchase_query.where(SeasonProduct.club_name==user.managed_club)
+    holders=db.scalars(holders_query.where(or_(SeasonTicket.number.ilike(f"%{q}%"),SeasonTicket.full_name.ilike(f"%{q}%"),SeasonTicket.email.ilike(f"%{q}%")))).all() if q else []
+    purchases=db.scalars(purchase_query.where(or_(SeasonPurchase.reference.ilike(f"%{q}%"),User.name.ilike(f"%{q}%"),User.email.ilike(f"%{q}%")))).all() if q else []
+    return render(request,"search.html",q=q,orders=orders,tickets=tickets,holders=holders,purchases=purchases)
 @app.get("/admin/events/{event_id}/tickets.csv")
-def export_tickets(event_id:int,user=Depends(require("admin")),db:Session=Depends(get_db)):
+def export_tickets(event_id:int,user=Depends(require_manager),db:Session=Depends(get_db)):
+    check_event(user,db.get(Event,event_id))
     out=StringIO(); w=csv.writer(out);w.writerow(["Ticket ID","Order reference","Status","Class","Section","Price"])
     for t in db.scalars(select(Ticket).where(Ticket.event_id==event_id)):w.writerow([t.public_id,t.order.reference,t.status,t.ticket_class.name,t.section.name,t.price])
     return StreamingResponse(iter([out.getvalue()]),media_type="text/csv",headers={"Content-Disposition":"attachment; filename=tickets.csv"})

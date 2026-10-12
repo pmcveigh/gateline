@@ -164,6 +164,86 @@ same prefix. Legacy ticket numbers and QR tokens are unchanged. The additive
 `club_pricing`, `enabled` and `adult_admission` schema changes are applied at
 startup, with `migrations/003_club_pricing.sql` for manual migration workflows.
 
+## Club administration
+Global administrators keep access to every club. Club administrators can manage
+only their assigned club's details, hosted fixtures, match/season pricing, holders,
+sales, ticket views, exports and activity. Being the away team does not grant
+control of another club's fixture. Every admin read/write route checks ownership;
+search results and QR/order access follow the same boundary. Supporter and gate
+roles cannot use club management.
+
+Club management is under `/admin/clubs`, separate from Match control. Clubs can
+edit display/contact/address/description/colour details and their default venue.
+Canonical identity and fixture ownership remain stable when display names change.
+Directory stadiums missing from the demo database get a sample General Admission
+section with capacity 1,000; these are setup examples, not audited ground limits.
+
+Staff sign in at `/login` with username or email. Startup creates one demo club
+administrator per directory/fixture club. Usernames are the lowercase club ticket
+prefix plus `.admin` (long names use a stable shortened prefix); email adds
+`@gateline.test`. The initial demo password is **`ClubAdmin123!`**. For example:
+
+| Club | Username | Email |
+| --- | --- | --- |
+| Glentoran | `glentoran.admin` | `glentoran.admin@gateline.test` |
+| Linfield | `linfield.admin` | `linfield.admin@gateline.test` |
+| Cliftonville | `cliftonville.admin` | `cliftonville.admin@gateline.test` |
+
+The global admin account `admin@gateline.test` / `Admin123!` remains available.
+Global admins can inspect all club accounts and create additional administrators
+at `/admin/club-accounts`; generated passwords appear once. Clubs change their
+own password at `/admin/settings`. Existing credentials are never reset by startup.
+These shared initial credentials are for demo testing and must be replaced before
+production use.
+
+Match control and club/holder lists have live text filters; fixture and holder
+search also works on server submission. Search includes match orders/tickets,
+season holders and season purchases within the administrator's scope. Club
+activity records detail, fixture, inventory, pricing and season changes.
+
+Club admins can create draft fixtures, amend title/opponent/competition/dates/
+description and control publication/sales lifecycle. Section capacities, blocked
+allocations, home/away audiences and per-fixture ticket types/prices/age limits are
+editable. Capacity changes must accommodate issued tickets and active holds;
+booked venues/claim policy and issued type allocations cannot be silently moved.
+Shortened sales windows shorten live reservation deadlines. Published fixtures
+still require inventory and enabled prices.
+
+### Season holders and sales
+`/admin/clubs/{club}/season-tickets/new` issues a product-based or custom pass. A
+new supporter email creates a supporter account, date-of-birth profile and club
+interest, with a generated username/password displayed **once** in a non-cached
+response. Give these details to the holder; the app does not send email. An
+existing supporter email links its account without changing its name, date of
+birth, password or preferences. Staff identities cannot be converted into holders.
+Issuance retries return the same pass. Clubs can view/print their holders' QR passes,
+suspend/reactivate passes and search by name, email, number or section.
+
+Generated pass numbers begin with the club prefix, e.g. `GLENTORAN-ST-`, and a
+random suffix. Existing test numbers `12345` and `LF12345` and voucher `DEMO10`
+remain documented above and visible in their relevant app windows.
+
+Season products are managed at `/admin/clubs/{club}/season-products`: section,
+category, competition, validity, price, capacity, concession limits and an app-sale
+switch. Existing passes retain allocation/dates and purchase totals. Direct issue
+and successful app purchases consume product capacity atomically; declined test
+payments consume none. Overlapping passes and duplicate requests are rejected or
+return the original receipt. Product quantities are separate from match inventory.
+
+**Glentoran example:** next-season Sydenham End products start at **Adult £250** and
+**Concession £150** (2027/28 when initialised in October 2026). Phil can renew using
+his existing account; his current 2026/27 pass is preserved. The admin catalogue
+provides a customer purchase URL (`/season-tickets/products/{id}`), and the club
+profile links available products. Staff can preview the offer; only supporters can
+purchase it. Customer purchases use the existing explicit **test payment** model,
+check saved age/disability eligibility, create a QR season pass linked to the same
+account and appear in purchase history and club sales tracking. No real payment
+provider or email delivery has been added.
+
+Run `migrations/006_club_administration_and_season_sales.sql` once if managing SQL
+manually. Application startup upgrades the schema, backfills legacy fixture
+ownership, adds club accounts and creates the example products idempotently.
+
 ## Database and migrations
 The application creates a new schema on first start. Schema evolution lives in `migrations/`; for this initial baseline run the included SQL or the seed script. Set `DATABASE_URL=postgresql+psycopg://...` for PostgreSQL and install its driver.
 
@@ -182,7 +262,7 @@ Tests cover reservation exclusivity/capacity/expiry, priority and voucher enforc
 * `tests/` — critical business rules.
 
 ## Current limitations and roadmap
-v0.1.8 uses a test payment provider, browser print-to-PDF, online scanning, a single configured club, simple stand gate assignment and ten-minute lazy-expiry reservations. Email/SMS, wallets, offline/hardware scanning, season-ticket administration/renewals, verified identity/age checks, email verification/password recovery, resale, hospitality, accounting and dynamic pricing are intentionally excluded. Future releases can add a background expiry worker, Stripe/Worldpay adapters, PostgreSQL row locking, broader decoder compatibility, richer venue editing and multi-organisation tenancy without changing the core ticket lifecycle.
+v0.1.8 uses a test payment provider, browser print-to-PDF, online scanning, a single configured club, simple stand gate assignment and ten-minute lazy-expiry reservations. Email/SMS, wallets, offline/hardware scanning, verified identity/age checks, email verification/password recovery, resale, hospitality, accounting and dynamic pricing are intentionally excluded. Future releases can add a background expiry worker, Stripe/Worldpay adapters, PostgreSQL row locking, broader decoder compatibility, richer venue editing and multi-organisation tenancy without changing the core ticket lifecycle.
 
 ## v0.1.8 camera and HTTPS testing
 Gate operators can use manual ticket entry, a keyboard-wedge scanner, native image capture/upload, or an in-page camera started explicitly with **Take QR photo**. Image decoding is local through the browser `BarcodeDetector`; unsupported browsers clearly fall back to manual/wedge entry. Photos are not uploaded or retained. Webcam APIs require HTTPS or trusted `localhost`—a phone visiting an ordinary `http://192.168.x.x` LAN address is **not** localhost.

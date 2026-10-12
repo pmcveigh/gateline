@@ -176,6 +176,8 @@ def seed_database() -> int:
     with Session(engine) as db:
         from gateline.demo import ensure_demo_data
         ensure_demo_data(db)
+        from gateline.management import initialise_management
+        initialise_management(db)
     return fixture_number+1
 
 
