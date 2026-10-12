@@ -1,12 +1,12 @@
 """Supporter and club season-ticket routes."""
 from io import BytesIO
-import json
+import json, re
 import qrcode
 from fastapi import Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-from .auth import require, verify
+from .auth import hash_password, require, verify
 from .database import get_db
 from .models import SeasonTicket, SupporterAttendance, User
 from .supporters import club_choices, dashboard_data, profile_for, register_supporter, save_profile
@@ -47,20 +47,45 @@ def install_accounts(app, render):
     def concession_preference(request:Request,force_concession:bool=Form(False),user=Depends(require('supporter')),db:Session=Depends(get_db)):
         profile_for(db,user).force_concession=force_concession
         db.commit()
-        return RedirectResponse('/account?saved=1',303)
+        return RedirectResponse('/account/settings?saved=1',303)
 
     @app.get('/account/profile', response_class=HTMLResponse)
     def profile(request:Request,user=Depends(require('supporter')),db:Session=Depends(get_db)):
+        return render(request,'account_profile.html',**dashboard_data(db,user))
+
+    @app.get('/account/tickets', response_class=HTMLResponse)
+    def bought_tickets(request:Request,user=Depends(require('supporter')),db:Session=Depends(get_db)):
+        return render(request,'account_tickets.html',**dashboard_data(db,user))
+
+    @app.get('/account/history', response_class=HTMLResponse)
+    def history(request:Request,user=Depends(require('supporter')),db:Session=Depends(get_db)):
+        return render(request,'account_history.html',**dashboard_data(db,user))
+
+    @app.get('/account/settings', response_class=HTMLResponse)
+    def settings(request:Request,user=Depends(require('supporter')),db:Session=Depends(get_db)):
         p=profile_for(db,user)
-        return render(request,'account_profile.html',profile=p,interests=json.loads(p.clubs_json),clubs=club_choices(db))
+        return render(request,'account_settings.html',profile=p,interests=json.loads(p.clubs_json),clubs=club_choices(db))
 
     @app.post('/account/profile')
-    def update_profile(request:Request,full_name:str=Form(),birth_date:str=Form(),clubs:list[str]=Form([]),force_concession:bool=Form(False),disability_type:str=Form(''),access_details:str=Form(''),share_access_needs:bool=Form(False),address1:str=Form(''),address2:str=Form(''),city:str=Form(''),postcode:str=Form(''),country:str=Form('United Kingdom'),user=Depends(require('supporter')),db:Session=Depends(get_db)):
+    @app.post('/account/settings')
+    def update_profile(request:Request,full_name:str=Form(),birth_date:str=Form(),clubs:list[str]=Form([]),force_concession:bool=Form(False),disability_type:str=Form(''),access_details:str=Form(''),share_access_needs:bool=Form(False),address1:str=Form(''),address2:str=Form(''),city:str=Form(''),postcode:str=Form(''),country:str=Form('United Kingdom'),email:str|None=Form(None),current_password:str=Form(''),new_password:str=Form(''),password_confirmation:str=Form(''),user=Depends(require('supporter')),db:Session=Depends(get_db)):
+        stored=db.get(User,user.id)
         try:
-            save_profile(db,db.get(User,user.id),full_name,birth_date,clubs,force_concession,disability_type,access_details,share_access_needs,address1,address2,city,postcode,country)
+            contact=(email if email is not None else stored.email).strip().casefold()
+            if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',contact) or len(contact)>200: raise ValueError('Enter a valid email address')
+            if contact!=stored.email or new_password:
+                if len(current_password.encode())>72 or not verify(current_password,stored.password_hash): raise ValueError('Enter your current password to change your email or password')
+                if db.scalar(select(User.id).where(func.lower(User.email)==contact,User.id!=stored.id)): raise ValueError('That email address is already in use')
+            if new_password:
+                if len(new_password)<8 or len(new_password.encode())>72: raise ValueError('Use a password of at least 8 characters and no more than 72 bytes')
+                if new_password!=password_confirmation: raise ValueError('New passwords do not match')
+                stored.password_hash=hash_password(new_password)
+            stored.email=contact
+            save_profile(db,stored,full_name,birth_date,clubs,force_concession,disability_type,access_details,share_access_needs,address1,address2,city,postcode,country)
         except ValueError as error:
-            return render(request,'account_profile.html',status_code=400,profile=profile_for(db,user),interests=clubs,clubs=club_choices(db),error=str(error))
-        return RedirectResponse('/account/profile?saved=1',303)
+            db.rollback()
+            return render(request,'account_settings.html',status_code=400,profile=profile_for(db,user),interests=clubs,clubs=club_choices(db),error=str(error))
+        return RedirectResponse('/account/settings?saved=1',303)
 
     def owned_pass(db,pass_id,user):
         st=db.get(SeasonTicket,pass_id)

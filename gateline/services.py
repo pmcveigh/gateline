@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from .models import *
 from .ticketing import club_key, is_adult, selected_classes, ticket_prefix, validate_vip_ages
 from .supporters import london_date, scan_season_ticket, validate_attendees
+from .allocations import allocated_class, verify_away_membership
 
 def utc(value: datetime) -> datetime:
     """Return a comparable UTC datetime (SQLite drops timezone metadata)."""
@@ -19,14 +20,22 @@ class PaymentService:
 class SimulatedPaymentService(PaymentService):
     def charge(self, amount: Decimal, test_result: str) -> PaymentResult: return PaymentResult(test_result == "success")
 
-def reserve(db:Session,event_id:int,section_id:int,quantity:int,seat_ids:list[int],selection=None) -> Reservation:
+def reserve(db:Session,event_id:int,section_id:int,quantity:int,seat_ids:list[int],selection=None,*,supporter=None,away_season_number=None) -> Reservation:
     now=datetime.now(timezone.utc); event=db.get(Event,event_id); section=db.get(Section,section_id); inv=db.scalar(select(EventInventory).where(EventInventory.event_id==event_id,EventInventory.section_id==section_id))
     if not event or not section or not inv or quantity < 1 or quantity > 10: raise ValueError("Invalid ticket selection")
     if not event.published or event.cancelled or event.sales_suspended or now < utc(event.sales_open) or now > utc(event.sales_close): raise ValueError("Tickets are not currently on sale")
     stand=db.get(Stand,section.stand_id)
     if not stand or stand.venue_id != event.venue_id: raise ValueError("Section does not belong to this fixture venue")
-    if selection is not None: selected_classes(event,selection,quantity)
+    if section.mode!='assigned' and seat_ids: raise ValueError("This section does not use assigned seats")
+    lines=selected_classes(event,selection,quantity) if selection is not None else []
+    if any(not allocated_class(tc,inv) for tc,_ in lines): raise ValueError("Choose a ticket type available in this section")
+    away=inv.audience=='away' or any(tc.audience=='away' for tc,_ in lines)
+    membership=verify_away_membership(db,event,supporter,away_season_number) if away else None
+    if inv.audience=='away' and selection is None: raise ValueError("Choose an away ticket type")
     active=select(Reservation).where(Reservation.event_id==event_id,Reservation.section_id==section_id,Reservation.completed==False,Reservation.expires_at>now)
+    sold_qty=db.scalar(select(func.count(Ticket.id)).where(Ticket.event_id==event_id,Ticket.section_id==section_id,Ticket.status.in_(["sold","scanned"]))) or 0
+    held_qty=db.scalar(select(func.coalesce(func.sum(Reservation.quantity),0)).where(Reservation.event_id==event_id,Reservation.section_id==section_id,Reservation.completed==False,Reservation.expires_at>now)) or 0
+    if sold_qty+held_qty+quantity > inv.capacity-inv.held: raise ValueError("Your selected tickets are unavailable. Please change your selection.")
     if section.mode==Mode.ASSIGNED.value:
         if len(seat_ids)!=quantity or len(set(seat_ids))!=quantity: raise ValueError("Select distinct seats for every ticket")
         valid=set(db.scalars(select(Seat.id).join(SeatRow).where(SeatRow.section_id==section_id,Seat.id.in_(seat_ids),Seat.available==True)).all())
@@ -34,15 +43,11 @@ def reserve(db:Session,event_id:int,section_id:int,quantity:int,seat_ids:list[in
         sold=set(db.scalars(select(Ticket.seat_id).where(Ticket.event_id==event_id,Ticket.status.in_(["sold","scanned"]),Ticket.seat_id.in_(seat_ids))).all())
         held=set(db.scalars(active.where(Reservation.seat_id.in_(seat_ids)).with_only_columns(Reservation.seat_id)).all())
         if sold or held: raise ValueError("A selected seat is no longer available")
-    else:
-        sold=db.scalar(select(func.count(Ticket.id)).where(Ticket.event_id==event_id,Ticket.section_id==section_id,Ticket.status.in_(["sold","scanned"]))) or 0
-        held=db.scalar(select(func.coalesce(func.sum(Reservation.quantity),0)).where(Reservation.event_id==event_id,Reservation.section_id==section_id,Reservation.completed==False,Reservation.expires_at>now)) or 0
-        if sold+held+quantity > inv.capacity-inv.held: raise ValueError("Your selected tickets are unavailable. Please change your selection.")
     token=secrets.token_urlsafe(20); expiry=min(now+timedelta(minutes=10),utc(event.sales_close))
     # One reservation row per assigned seat preserves the database uniqueness guard.
     rows=[]
     for seat in (seat_ids if seat_ids else [None]):
-        row=Reservation(token=token if not rows else token+f"-{len(rows)}",event_id=event_id,section_id=section_id,seat_id=seat,quantity=1 if seat else quantity,expires_at=expiry,selection_json=json.dumps({"classes":selection or {},"root":token})); db.add(row); rows.append(row)
+        row=Reservation(token=token if not rows else token+f"-{len(rows)}",event_id=event_id,section_id=section_id,seat_id=seat,quantity=1 if seat else quantity,expires_at=expiry,selection_json=json.dumps({"classes":selection or {},"root":token,"away_season_ticket_id":membership.id if membership else None,"supporter_id":supporter.id if membership else None})); db.add(row); rows.append(row)
     db.commit(); return rows[0]
 
 def voucher_discount(db, code, event_id, subtotal):
@@ -69,6 +74,11 @@ def checkout(db:Session, reservation_token:str, class_id:int|None, customer_data
     stored=json.loads(reservations[0].selection_json or "{}")
     selection=stored.get("classes",stored) or {class_id:qty}
     lines=selected_classes(event,selection,qty)
+    inventory=db.scalar(select(EventInventory).where(EventInventory.event_id==event.id,EventInventory.section_id==reservations[0].section_id))
+    if not inventory or any(not allocated_class(tc,inventory) for tc,_ in lines): raise ValueError("Choose a ticket type available in this section")
+    if inventory.audience=='away' or any(tc.audience=='away' for tc,_ in lines):
+        if stored.get('supporter_id')!=(supporter.id if supporter else None): raise ValueError("Sign in to the account that reserved these away tickets")
+        verify_away_membership(db,event,supporter,membership_id=stored.get('away_season_ticket_id'))
     profile=db.get(SupporterProfile,supporter.id) if supporter and supporter.role=="supporter" else None
     if supporter and supporter.role!="supporter": raise ValueError("Use a supporter account to book personal tickets")
     if attendee_birth_dates is None:
@@ -79,7 +89,7 @@ def checkout(db:Session, reservation_token:str, class_id:int|None, customer_data
     required=("full_name","email","address1","city","postcode","country")
     if any(not str(customer_data.get(key,"")).strip() for key in required) or "@" not in customer_data.get("email",""): raise ValueError("Enter a valid name, email and postal address")
     vip_qty=sum(count for tc,count in lines if tc.name=="VIP")
-    priority_qty=qty if event.priority_until and now<utc(event.priority_until) else 0
+    priority_qty=qty if not stored.get('away_season_ticket_id') and event.priority_until and now<utc(event.priority_until) else 0
     discounted_vip=vip_qty if vip_season_holder and club_key(event.home_team)==club_key("Glentoran") else 0
     entitlement=max(priority_qty,discounted_vip)
     priority=None
@@ -141,6 +151,8 @@ def scan_ticket(db, token, event_id, operator, gate=None, override=False):
     ticket=db.scalar(select(Ticket).where((Ticket.qr_token==token)|(func.upper(Ticket.public_id)==token.upper())))
     if not ticket: return scan_season_ticket(db,token,event_id,operator)
     if ticket.event_id!=event_id: return {"result":"WRONG FIXTURE","detail":"Select the ticket's fixture"}
+    event=db.get(Event,event_id)
+    if not event or event.cancelled or not event.published: return {"result":"INVALID FIXTURE","detail":"This fixture is cancelled or unavailable for admission"}
     if ticket.status in ["cancelled","refunded","expired"]: return {"result":"INVALID TICKET","detail":ticket.status.upper()+" — admission is not permitted"}
     prior=db.scalar(select(Scan).where(Scan.ticket_id==ticket.id,Scan.result=="valid"))
     if ticket.status=="scanned" or prior:return {"result":"ALREADY USED","detail":prior.scanned_at.isoformat() if prior else "Previously scanned"}
@@ -153,7 +165,7 @@ def scan_ticket(db, token, event_id, operator, gate=None, override=False):
     if changed.rowcount != 1:
         db.rollback(); return {"result":"ALREADY USED","detail":"Previously scanned"}
     db.add(Scan(ticket_id=ticket.id,operator_id=operator.id,gate=gate,result="valid"))
-    if ticket.attendee_user_id: db.add(SupporterAttendance(user_id=ticket.attendee_user_id,event_id=event_id,ticket_id=ticket.id,operator_id=operator.id))
+    if ticket.attendee_user_id: db.add(SupporterAttendance(user_id=ticket.attendee_user_id,event_id=event_id,ticket_id=ticket.id,season_ticket_id=ticket.season_ticket_id,operator_id=operator.id))
     try: db.commit()
     except IntegrityError:
         db.rollback();return {"result":"ALREADY USED","detail":"Supporter has already entered this fixture"}

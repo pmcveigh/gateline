@@ -174,9 +174,9 @@ def seed_database() -> int:
         db.commit()
 
     with Session(engine) as db:
-        from gateline.supporters import ensure_test_supporter
-        ensure_test_supporter(db)
-    return fixture_number
+        from gateline.demo import ensure_demo_data
+        ensure_demo_data(db)
+    return fixture_number+1
 
 
 if __name__ == "__main__":

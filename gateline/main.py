@@ -22,6 +22,8 @@ from .models import *
 from .services import checkout, reserve, reservation_rows, scan_ticket
 from .supporters import access_needs_for_event, active_memberships, ensure_test_supporter, preferred_classes, profile_for, restriction
 from .accounts import install_accounts
+from .allocations import claim_memberships, claim_season_ticket, claim_target, classes_for_inventory, verify_away_membership
+from .demo import DEMO_CODES, ensure_demo_data
 from .ticketing import canonical_club, club_key, configure_club_tickets, is_adult, menu_for_club, minimum_adult_price, offered_classes, save_club_pricing, selected_classes, upgrade_club_tickets, VIP_MIN_AGE
 
 app=FastAPI(title="Gateline",version=__version__)
@@ -33,7 +35,7 @@ def startup():
     upgrade_schema()
     with Session(engine) as db:
         upgrade_club_tickets(db)
-        ensure_test_supporter(db)
+        ensure_demo_data(db)
     LOG_DIR.mkdir(parents=True,exist_ok=True)
 @app.middleware("http")
 async def load_user(request,call_next):
@@ -57,7 +59,7 @@ async def log_session(request,call_next):
         with (LOG_DIR/f"{session_id}.log").open("a",encoding="utf-8") as log: log.write(json.dumps(entry)+"\n")
     return response
 app.add_middleware(SessionMiddleware,secret_key=__import__('os').getenv("SECRET_KEY",secrets.token_hex(32)),https_only=False,same_site="lax")
-def render(request,template_name,status_code=200,**ctx): return templates.TemplateResponse(request,template_name,{"user":request.state.user,"version":__version__,"quote":quote,"minimum_adult_price":minimum_adult_price,"local_time":local_time,"filter_url":fixture_filter_url,"offered_classes":offered_classes,**ctx},status_code=status_code)
+def render(request,template_name,status_code=200,**ctx): return templates.TemplateResponse(request,template_name,{"user":request.state.user,"version":__version__,"demo_codes":DEMO_CODES,"quote":quote,"minimum_adult_price":minimum_adult_price,"local_time":local_time,"filter_url":fixture_filter_url,"offered_classes":offered_classes,**ctx},status_code=status_code)
 
 install_accounts(app,render)
 
@@ -130,6 +132,8 @@ def render_event(request,db,event_id,selection=None,error=None,status_code=200):
     event=db.get(Event,event_id)
     if not event or not event.published: raise HTTPException(404)
     now=datetime.now(timezone.utc); availability={}
+    unavailable_seats=set(db.scalars(select(Ticket.seat_id).where(Ticket.event_id==event_id,Ticket.seat_id.is_not(None),Ticket.status.in_(['sold','scanned']))).all())
+    unavailable_seats.update(db.scalars(select(Reservation.seat_id).where(Reservation.event_id==event_id,Reservation.seat_id.is_not(None),Reservation.completed==False,Reservation.expires_at>now)).all())
     for inv in event.inventories:
         sold=db.scalar(select(func.count(Ticket.id)).where(Ticket.event_id==event.id,Ticket.section_id==inv.section_id,Ticket.status.in_(["sold","scanned"]))) or 0
         held=db.scalar(select(func.coalesce(func.sum(Reservation.quantity),0)).where(Reservation.event_id==event.id,Reservation.section_id==inv.section_id,Reservation.completed==False,Reservation.expires_at>now)) or 0
@@ -137,9 +141,38 @@ def render_event(request,db,event_id,selection=None,error=None,status_code=200):
     on_sale=bool(offered_classes(event)) and not event.cancelled and not event.sales_suspended and utc_dt(event.sales_open)<=now<=utc_dt(event.sales_close)
     supporter=request.state.user if request.state.user and request.state.user.role=="supporter" else None
     profile=profile_for(db,supporter) if supporter else None
-    return render(request,"event.html",status_code=status_code,event=event,availability=availability,on_sale=on_sale,selection=selection,error=error,is_adult=is_adult,ticket_classes=preferred_classes(event,profile),supporter_profile=profile,restriction=restriction)
+    away_access=None
+    access_id=request.session.get('away_access',{}).get(str(event.id))
+    if access_id:
+        try: away_access=verify_away_membership(db,event,supporter,membership_id=access_id)
+        except ValueError: pass
+    classes=preferred_classes(event,profile)
+    home_groups=[(inv,classes_for_inventory(event,inv,classes,'home')) for inv in event.inventories]
+    away_groups=[(inv,classes_for_inventory(event,inv,classes,'away')) for inv in event.inventories] if away_access else []
+    claims=[]
+    for st in claim_memberships(db,event,supporter):
+        prior=db.scalar(select(Ticket).where(Ticket.event_id==event.id,Ticket.season_ticket_id==st.id))
+        try: inv,_=claim_target(event,st)
+        except ValueError: inv=None
+        claims.append((st,prior,inv))
+    return render(request,"event.html",status_code=status_code,event=event,availability=availability,unavailable_seats=unavailable_seats,on_sale=on_sale,selection=selection,error=error,is_adult=is_adult,ticket_classes=classes,home_groups=home_groups,away_groups=away_groups,away_access=away_access,claims=claims,supporter_profile=profile,restriction=restriction)
+
+@app.post('/events/{event_id}/away-access')
+def unlock_away(event_id:int,request:Request,season_number:str=Form(),user=Depends(require('supporter')),db:Session=Depends(get_db)):
+    event=db.get(Event,event_id)
+    if not event or not event.published: raise HTTPException(404)
+    try: st=verify_away_membership(db,event,user,season_number)
+    except ValueError as error: return render_event(request,db,event_id,error=str(error),status_code=400)
+    request.session['away_access']={**request.session.get('away_access',{}),str(event_id):st.id}
+    return RedirectResponse(f'/events/{event_id}#away-tickets',303)
+
+@app.post('/events/{event_id}/season-claim')
+def season_claim(event_id:int,request:Request,membership_id:int=Form(),seat_id:int|None=Form(None),user=Depends(require('supporter')),db:Session=Depends(get_db)):
+    try: order=claim_season_ticket(db,event_id,user,membership_id,seat_id)
+    except ValueError as error: return render_event(request,db,event_id,error=str(error),status_code=409)
+    return RedirectResponse(f'/orders/{order.reference}',303)
 @app.post("/events/{event_id}/reserve")
-def make_reservation(event_id:int,request:Request,section_id:int=Form(),quantity:int=Form(0),seat_ids:str=Form(""),class_ids:list[int]=Form([]),ticket_quantities:list[str]=Form([]),db:Session=Depends(get_db)):
+def make_reservation(event_id:int,request:Request,section_id:int=Form(),quantity:int=Form(0),seat_ids:str=Form(""),class_ids:list[int]=Form([]),ticket_quantities:list[str]=Form([]),away_season_number:str=Form(''),db:Session=Depends(get_db)):
     selection=None
     try:
         if class_ids or ticket_quantities:
@@ -147,7 +180,8 @@ def make_reservation(event_id:int,request:Request,section_id:int=Form(),quantity
             counts=[int(value) if value.strip() else 0 for value in ticket_quantities]
             selection={class_id:count for class_id,count in zip(class_ids,counts) if count!=0}
             quantity=sum(selection.values())
-        r=reserve(db,event_id,section_id,quantity,[int(x) for x in seat_ids.split(",") if x],selection)
+        supporter=request.state.user if request.state.user and request.state.user.role=='supporter' else None
+        r=reserve(db,event_id,section_id,quantity,[int(x) for x in seat_ids.split(",") if x],selection,supporter=supporter,away_season_number=away_season_number)
     except ValueError as e: return render_event(request,db,event_id,selection,str(e),409)
     return RedirectResponse(f"/checkout/{r.token}",303)
 @app.get("/checkout/{token}",response_class=HTMLResponse)
@@ -179,7 +213,9 @@ def render_checkout(request,db,token,form=None,error=None,status_code=200):
     now=datetime.now(timezone.utc)
     expired=selection_invalid or any(row.completed or utc_dt(row.expires_at)<=now for row in rows)
     units=[tc for tc,count in lines for _ in range(count)]
-    return render(request,"checkout.html",status_code=status_code,reservation=r,event=event,lines=lines,units=units,quantity=quantity,ticket_subtotal=ticket_subtotal,vip_count=vip_count,vip_min_age=VIP_MIN_AGE,selection=selection,form=form,error=error,supporter_profile=profile,restriction=restriction,vip_discount_allowed=club_key(event.home_team)==club_key("Glentoran"),expired=expired,expires_ms=int((now if expired else utc_dt(r.expires_at)).timestamp()*1000),server_now_ms=int(now.timestamp()*1000))
+    away_booking=bool(stored.get('away_season_ticket_id'))
+    if away_booking and (not supporter or supporter.id!=stored.get('supporter_id')): raise HTTPException(404)
+    return render(request,"checkout.html",status_code=status_code,reservation=r,event=event,lines=lines,units=units,quantity=quantity,ticket_subtotal=ticket_subtotal,vip_count=vip_count,vip_min_age=VIP_MIN_AGE,selection=selection,form=form,error=error,supporter_profile=profile,restriction=restriction,away_booking=away_booking,vip_discount_allowed=not away_booking and club_key(event.home_team)==club_key("Glentoran"),expired=expired,expires_ms=int((now if expired else utc_dt(r.expires_at)).timestamp()*1000),server_now_ms=int(now.timestamp()*1000))
 @app.post("/checkout/{token}")
 def complete(token:str,request:Request,full_name:str=Form(),email:str=Form(),address1:str=Form(),address2:str=Form(""),city:str=Form(),postcode:str=Form(),country:str=Form(),class_id:int|None=Form(None),priority_code:str=Form(""),voucher_code:str=Form(""),test_result:str=Form("success"),vip_season_holder:bool=Form(False),vip_birth_dates:list[str]=Form([]),personal_index:int=Form(-1),attendee_birth_dates:list[str]=Form([]),disability_indices:list[int]=Form([]),db:Session=Depends(get_db)):
     customer=dict(full_name=full_name,email=email,address1=address1,address2=address2,city=city,postcode=postcode,country=country)
@@ -198,7 +234,8 @@ def ticket_view(public_id:str,request:Request,access:str="",db:Session=Depends(g
     ticket=db.scalar(select(Ticket).where(Ticket.public_id==public_id));
     if not ticket: raise HTTPException(404)
     if not owns_order(request,ticket.order) and not secrets.compare_digest(access,ticket.order.access_token): raise HTTPException(404)
-    return render(request,"ticket.html",ticket=ticket,event=db.get(Event,ticket.event_id),access=access)
+    seat_label=f'{db.get(SeatRow,ticket.seat.row_id).name}-{ticket.seat.number}' if ticket.seat else None
+    return render(request,"ticket.html",ticket=ticket,event=db.get(Event,ticket.event_id),seat_label=seat_label,access=access)
 @app.get("/tickets/{public_id}/qr.png")
 def qr(public_id:str,request:Request,access:str="",db:Session=Depends(get_db)):
     ticket=db.scalar(select(Ticket).where(Ticket.public_id==public_id));

@@ -1,0 +1,1 @@
+<nav class="account-nav" aria-label="Supporter pages">{% for path,label in [('/account','Your Matches'),('/account/profile','Profile'),('/account/settings','Settings'),('/account/tickets','Your Tickets'),('/account/history','History')] %}<a href="{{path}}" {{'aria-current=page' if request.url.path==path}}>{{label}}</a>{% endfor %}</nav>

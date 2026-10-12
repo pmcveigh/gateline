@@ -38,7 +38,7 @@ def is_adult(ticket_class):
 
 
 def minimum_adult_price(event):
-    prices = [tc.price for tc in offered_classes(event) if is_adult(tc) and tc.maximum > 0]
+    prices = [tc.price for tc in offered_classes(event) if tc.audience=='home' and is_adult(tc) and tc.maximum > 0]
     return min(prices) if prices else None
 
 
@@ -91,7 +91,6 @@ def is_generic_seed_menu(classes):
 
 
 def menu_for_club(db, name):
-    pricing=db.get(ClubPricing,club_key(name))
     return initialise_club_pricing(db,name)
 
 
@@ -118,7 +117,7 @@ def initialise_club_pricing(db, name):
         menu[title]={"name":title,"price":price,"description":description,"adult":title in ADULT_NAMES}
     if source and not is_generic_seed_menu(offered_classes(source)):
         for tc in source.classes:
-            if not tc.enabled or (has_seed_defaults(source.classes) and legacy_generic(tc)): continue
+            if not tc.enabled or tc.audience!='home' or (has_seed_defaults(source.classes) and legacy_generic(tc)): continue
             # Preserve genuinely configured prices and extra club-specific types.
             if bespoke and has_seed_defaults(source.classes) and (tc.name,tc.description,tc.price)==("Concession","Eligible concessions",Decimal("10")): continue
             menu[tc.name]={"name":tc.name,"price":str(tc.price),"description":tc.description,"adult":is_adult(tc),"concession_under":tc.concession_under,"concession_over":tc.concession_over}
@@ -130,7 +129,7 @@ def initialise_club_pricing(db, name):
 def configure_club_tickets(db, event):
     """Start with club defaults, then respect the club's saved menu."""
     menu=initialise_club_pricing(db,event.home_team)
-    existing={tc.name:tc for tc in event.classes}
+    existing={tc.name:tc for tc in event.classes if tc.audience=='home'}
     seeded=has_seed_defaults(existing.values())
     for entry in menu:
         if entry["name"] not in existing:
@@ -182,7 +181,7 @@ def save_club_pricing(db, name, names, prices, descriptions, categories, concess
     now=datetime.now(timezone.utc)
     for event in db.scalars(select(Event).where(Event.starts_at>now)).all():
         if club_key(event.home_team)!=key: continue
-        existing={tc.name:tc for tc in event.classes}
+        existing={tc.name:tc for tc in event.classes if tc.audience=='home'}
         for tc in existing.values(): tc.enabled=tc.name in {entry["name"] for entry in menu}
         for entry in menu:
             tc=existing.get(entry["name"])
