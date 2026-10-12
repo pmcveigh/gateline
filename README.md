@@ -9,9 +9,9 @@ Python 3.12+, FastAPI, SQLAlchemy 2, SQLite (development; PostgreSQL via `DATABA
 ```bash
 uv sync
 RESET_DEMO_DATABASE=1 uv run python scripts/seed.py
-SECRET_KEY='replace-me' uv run uvicorn gateline.main:app --reload
+SECRET_KEY='replace-me' uv run uvicorn gateline.main:app --host 0.0.0.0 --reload
 ```
-Open http://127.0.0.1:8000. To retain data, do not re-run the destructive demo seed command. Production deployments must use HTTPS, a persistent `SECRET_KEY`, secure-cookie configuration and PostgreSQL.
+Open http://127.0.0.1:8000 locally, or http://<server-LAN-IP>:8000 from another LAN device. The command listens on all IPv4 interfaces. To retain data, do not re-run the destructive demo seed command. Production deployments must use HTTPS, a persistent `SECRET_KEY`, secure-cookie configuration and PostgreSQL.
 
 ### Staff login (local development only)
 After seeding the database, open [http://127.0.0.1:8000/login](http://127.0.0.1:8000/login) and sign in with one of these demo staff accounts:
