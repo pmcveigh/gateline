@@ -25,7 +25,8 @@ def install_accounts(app, render):
         if len(password.encode())>72 or not user or not verify(password,user.password_hash):
             return render(request,'account_login.html',status_code=401,error='Incorrect username or password',identity=identity)
         request.session.clear();request.session['user_id']=user.id
-        return RedirectResponse('/account',303)
+        next_path=request.query_params.get('next','')
+        return RedirectResponse(next_path if re.fullmatch(r'/season-tickets/products/[0-9]+',next_path) else '/account',303)
 
     @app.get('/register', response_class=HTMLResponse)
     def registration(request:Request, db:Session=Depends(get_db)):
@@ -102,8 +103,3 @@ def install_accounts(app, render):
     def season_qr(pass_id:int,user=Depends(require('supporter')),db:Session=Depends(get_db)):
         st=owned_pass(db,pass_id,user);out=BytesIO();qrcode.make(st.qr_token).save(out,'PNG');out.seek(0)
         return StreamingResponse(out,media_type='image/png')
-
-    @app.get('/admin/clubs/{name}/season-tickets',response_class=HTMLResponse)
-    def season_registry(name:str,request:Request,user=Depends(require('admin')),db:Session=Depends(get_db)):
-        memberships=db.scalars(select(SeasonTicket).where(SeasonTicket.club_name==club_key(name)).order_by(SeasonTicket.full_name)).all()
-        return render(request,'season_registry.html',name=name,memberships=memberships)

@@ -25,7 +25,7 @@ age-based eligibility, disability concessions and consent-based admin reporting
 are covered by route/business tests. Phil's specified test account and Glentoran
 season record are created idempotently. Season passes and personally assigned
 match tickets share a per-supporter/per-fixture admission guard. Password recovery,
-email verification, season-ticket renewal/admin editing and physical proof of age
+email verification and physical proof of age
 or disability are outside this demo portal; eligibility uses declared profile and
 guest details. Season-pass admissions are separate from ticket-stock allocation.
 
@@ -39,3 +39,16 @@ an account-owned away-club season ticket and revalidate it at checkout. Railway
 Stand uses assigned seats; home and away Disabled tickets share the home Lower
 Grandstand's physical capacity. Test numbers are documented and displayed at the
 bottom of the relevant screens. Fixture capacities are demo allocations.
+
+## Club administration and season sales
+
+Global and club administrator roles have separate resource scopes across reads,
+mutations, search, exports and protected ticket/QR views. Club management adds
+profile settings, fixture amendment, inventory/type controls and audit activity.
+Season issue creates a new supporter or links an existing account without
+resetting credentials. Product-based issue and simulated purchases share capacity
+limits; retries and duplicate entitlements cannot mint multiple passes. Initial
+account credentials appear once with no-store response headers. Glentoran next
+season Adult £250 / Concession £150 products demonstrate renewal for existing
+customers. Email delivery, real payments and identity verification remain outside
+the demo. New directory venue allocations are sample setup values.

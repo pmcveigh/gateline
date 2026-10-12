@@ -204,7 +204,8 @@ def dashboard_data(db,user):
     personal_events=[event for event in events if fav(event) or event.id in valid or event.id in covered or event.id in claimable]
     other_events=[event for event in events if event not in personal_events]
     attendance_history=[(admission,db.get(Event,admission.event_id)) for admission in sorted(admissions,key=lambda row:row.scanned_at,reverse=True)]
-    return dict(profile=profile,orders=orders,events=events,personal_events=personal_events,other_events=other_events,notices=notices,memberships=memberships,season_attendance=season_attendance,purchased=purchased,claimed=claimed,claimable=claimable,valid_bookings=valid,attendance_history=attendance_history,attended=attended,covered=covered,areas=areas,interests=interests)
+    season_purchases=db.scalars(select(SeasonPurchase).where(SeasonPurchase.user_id==user.id).order_by(SeasonPurchase.created_at.desc())).all()
+    return dict(season_purchases=season_purchases,profile=profile,orders=orders,events=events,personal_events=personal_events,other_events=other_events,notices=notices,memberships=memberships,season_attendance=season_attendance,purchased=purchased,claimed=claimed,claimable=claimable,valid_bookings=valid,attendance_history=attendance_history,attended=attended,covered=covered,areas=areas,interests=interests)
 
 
 def access_needs_for_event(db,event):

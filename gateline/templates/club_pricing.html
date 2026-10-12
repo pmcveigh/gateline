@@ -1,5 +1,5 @@
 {% extends 'base.html' %}{% block content %}
-<a href="/admin/clubs">← Club pricing</a><p class="eyebrow">CLUB ADMINISTRATION</p><h1>{{name}} pricing</h1>
+{% if club %}{% include '_club_nav.html' %}{% endif %}<a href="/admin/clubs">← Club management</a><p class="eyebrow">CLUB ADMINISTRATION</p><h1>{{name}} pricing</h1>
 <a href="/admin/clubs/{{quote(name,safe='')}}/season-tickets">Season-ticket register</a><p>This menu is used for new fixtures and updates upcoming home fixtures. Existing issued tickets keep their recorded prices.</p>
 {% if request.query_params.get('saved') %}<p class="pricing-saved" role="status">Club pricing saved.</p>{% endif %}
 {% if error %}<p class="form-error" role="alert">{{error}}</p>{% endif %}

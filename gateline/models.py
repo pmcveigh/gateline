@@ -8,13 +8,14 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
 
 def now(): return datetime.now(timezone.utc)
-class Role(str, Enum): ADMIN="admin"; GATE="gate"; SUPPORTER="supporter"
+class Role(str, Enum): ADMIN="admin"; CLUB_ADMIN="club_admin"; GATE="gate"; SUPPORTER="supporter"
 class Mode(str, Enum): ASSIGNED="assigned"; GENERAL="general"
 class TicketStatus(str, Enum): RESERVED="reserved"; SOLD="sold"; SCANNED="scanned"; CANCELLED="cancelled"; REFUNDED="refunded"; EXPIRED="expired"
 
 class User(Base):
     __tablename__="users"; id:Mapped[int]=mapped_column(primary_key=True); email:Mapped[str]=mapped_column(String(200),unique=True); name:Mapped[str]=mapped_column(String(120)); password_hash:Mapped[str]=mapped_column(String(255)); role:Mapped[str]=mapped_column(String(20)); gate:Mapped[str|None]=mapped_column(String(100),nullable=True)
     username:Mapped[str|None]=mapped_column(String(30),nullable=True,unique=True)
+    managed_club:Mapped[str|None]=mapped_column(String(150),nullable=True)
 class SupporterProfile(Base):
     __tablename__="supporter_profiles"
     user_id:Mapped[int]=mapped_column(ForeignKey("users.id"),primary_key=True)
@@ -45,7 +46,54 @@ class SeasonTicket(Base):
     active:Mapped[bool]=mapped_column(Boolean,default=True)
     qr_token:Mapped[str]=mapped_column(unique=True,default=lambda:secrets.token_urlsafe(32))
     user:Mapped[User]=relationship()
-    __table_args__=(UniqueConstraint("club_name","number"),)
+    product_id:Mapped[int|None]=mapped_column(ForeignKey("season_products.id"),nullable=True)
+    issuance_token:Mapped[str|None]=mapped_column(String(100),nullable=True,unique=True)
+    __table_args__=(UniqueConstraint("club_name","number"),UniqueConstraint("product_id","user_id"))
+
+class ClubManagement(Base):
+    __tablename__="club_management"
+    club_name:Mapped[str]=mapped_column(String(150),primary_key=True)
+    name:Mapped[str]=mapped_column(String(150))
+    display_name:Mapped[str]=mapped_column(String(150))
+    short_name:Mapped[str]=mapped_column(String(30))
+    contact_email:Mapped[str]=mapped_column(String(200),default="")
+    address:Mapped[str]=mapped_column(Text,default="")
+    description:Mapped[str]=mapped_column(Text,default="")
+    primary_colour:Mapped[str]=mapped_column(String(7),default="#07583b")
+    venue_id:Mapped[int|None]=mapped_column(ForeignKey("venues.id"),nullable=True)
+    venue:Mapped[Venue|None]=relationship()
+
+class SeasonProduct(Base):
+    __tablename__="season_products"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    club_name:Mapped[str]=mapped_column(ForeignKey("club_management.club_name"))
+    title:Mapped[str]=mapped_column(String(200))
+    section:Mapped[str]=mapped_column(String(100))
+    ticket_type:Mapped[str]=mapped_column(String(100))
+    competition:Mapped[str]=mapped_column(String(150))
+    valid_from:Mapped[date]=mapped_column(Date)
+    valid_until:Mapped[date]=mapped_column(Date)
+    price:Mapped[Decimal]=mapped_column(Numeric(10,2))
+    capacity:Mapped[int]=mapped_column(default=100)
+    issued:Mapped[int]=mapped_column(default=0)
+    enabled:Mapped[bool]=mapped_column(Boolean,default=False)
+    concession_under:Mapped[int]=mapped_column(default=16)
+    concession_over:Mapped[int]=mapped_column(default=65)
+
+class SeasonPurchase(Base):
+    __tablename__="season_purchases"
+    id:Mapped[int]=mapped_column(primary_key=True)
+    reference:Mapped[str]=mapped_column(String(40),unique=True)
+    token:Mapped[str]=mapped_column(String(100),unique=True)
+    user_id:Mapped[int]=mapped_column(ForeignKey("users.id"))
+    product_id:Mapped[int]=mapped_column(ForeignKey("season_products.id"))
+    season_ticket_id:Mapped[int|None]=mapped_column(ForeignKey("season_tickets.id"),nullable=True)
+    total:Mapped[Decimal]=mapped_column(Numeric(10,2))
+    payment_status:Mapped[str]=mapped_column(String(20))
+    created_at:Mapped[datetime]=mapped_column(default=now)
+    user:Mapped[User]=relationship()
+    product:Mapped[SeasonProduct]=relationship()
+    season_ticket:Mapped[SeasonTicket|None]=relationship()
 class SupporterAttendance(Base):
     __tablename__="supporter_attendances"
     id:Mapped[int]=mapped_column(primary_key=True)
@@ -69,6 +117,7 @@ class SeatRow(Base):
 class Seat(Base):
     __tablename__="seats"; id:Mapped[int]=mapped_column(primary_key=True); row_id:Mapped[int]=mapped_column(ForeignKey("seat_rows.id")); number:Mapped[str]=mapped_column(String(20)); available:Mapped[bool]=mapped_column(Boolean,default=True); __table_args__=(UniqueConstraint("row_id","number"),)
 class Event(Base):
+    owner_club:Mapped[str|None]=mapped_column(String(150),nullable=True)
     season_claim_required:Mapped[bool]=mapped_column(Boolean,default=False,server_default="0")
     __tablename__="events"; id:Mapped[int]=mapped_column(primary_key=True); title:Mapped[str]=mapped_column(String(200)); home_team:Mapped[str]; away_team:Mapped[str]; competition:Mapped[str]; venue_id:Mapped[int]=mapped_column(ForeignKey("venues.id")); starts_at:Mapped[datetime]=mapped_column(DateTime(timezone=True)); sales_open:Mapped[datetime]=mapped_column(DateTime(timezone=True)); sales_close:Mapped[datetime]=mapped_column(DateTime(timezone=True)); priority_until:Mapped[datetime|None]=mapped_column(DateTime(timezone=True),nullable=True); description:Mapped[str]=mapped_column(Text,default=""); published:Mapped[bool]=mapped_column(Boolean,default=False); cancelled:Mapped[bool]=mapped_column(Boolean,default=False); sales_suspended:Mapped[bool]=mapped_column(Boolean,default=False); archived:Mapped[bool]=mapped_column(Boolean,default=False); venue:Mapped[Venue]=relationship(); inventories:Mapped[list[EventInventory]]=relationship(cascade="all, delete-orphan"); classes:Mapped[list[TicketClass]]=relationship(cascade="all, delete-orphan")
 class EventInventory(Base):
