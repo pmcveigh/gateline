@@ -142,7 +142,7 @@ def test_match_cards_use_minimum_adult_price_and_profiles_include_dates(client):
     for path in ("/", "/clubs/Cliftonville", "/venues/1", "/competitions/NIFL%20Premiership%202026%2F27"):
         response=client.get(path)
         assert response.status_code==200
-        assert "Adult tickets from £15.00" in response.text
+        assert ("Tickets from £15.00" if path == "/" else "Adult tickets from £15.00") in response.text
         assert "Adult tickets from £1.00" not in response.text
         if path!="/":
             assert 'class="match-date"' in response.text

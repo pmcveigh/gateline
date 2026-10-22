@@ -1,0 +1,14 @@
+{% set kickoff = local_time(e.starts_at) %}
+{% set adult_price = minimum_adult_price(e) %}
+<article class="fixture-card">
+ <time class="fixture-date" datetime="{{e.starts_at.isoformat()}}"><b>{{kickoff.strftime('%d')}}</b><span>{{kickoff.strftime('%b %Y')}}</span><strong>{{kickoff.strftime('%H:%M')}}</strong></time>
+ <div class="fixture-body">
+  <div class="fixture-details">
+   <h3><a href="/events/{{e.id}}">{{e.title}}</a></h3>
+   <p class="fixture-price">{% if adult_price is not none %}Tickets from £{{'%.2f'|format(adult_price)}}{% else %}Adult tickets unavailable{% endif %}</p>
+   <a class="tag fixture-competition" href="/competitions/{{quote(e.competition, safe='')}}" title="{{e.competition}}">{{e.competition}}</a>
+   <p class="fixture-venue"><a href="/venues/{{e.venue_id}}">{{e.venue.name}}</a></p>
+  </div>
+  <a class="button" href="/events/{{e.id}}" aria-label="Tickets for {{e.title}}">Tickets</a>
+ </div>
+</article>

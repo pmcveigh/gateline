@@ -65,3 +65,34 @@ footer{text-align:center;color:var(--muted);padding:18px;font-size:12px}
 
 /* Club administration */
 .admin-panel{margin:10px 0;border:1px solid #dce4df;border-radius:8px;background:#fff;overflow:hidden}.admin-panel>summary{padding:12px;cursor:pointer;font-weight:700}.admin-panel>p{padding:0 16px 12px}.search label{flex:1}.admin-form textarea{width:100%}.tr form{display:flex;flex-wrap:wrap;gap:6px}.tr form input{max-width:160px}.pricing-clubs{margin-top:16px}#initial-password{font-size:16px;overflow-wrap:anywhere}@media(max-width:500px){.search{flex-wrap:wrap}.search label{flex-basis:100%}.tr form{flex-basis:100%}.admin-panel>summary{font-size:12px}}
+
+/* Fixture finder: give each match room and keep browsing controls accessible. */
+.fixture-finder{max-width:1920px;padding-inline:clamp(16px,2vw,40px)}
+.fixture-finder .finder-layout{grid-template-columns:260px minmax(0,1fr);gap:clamp(20px,2vw,36px)}
+.fixture-finder .finder-sidebar{position:sticky;top:16px;max-height:calc(100dvh - 32px);overflow:auto}
+.finder-panel{position:static;display:block;width:100%;max-width:none;max-height:none;margin:0;padding:0;border:0;background:transparent;color:var(--ink)}
+.fixture-finder .sidebar-content{margin:0}.fixture-finder .quick-filters{display:grid;gap:10px;margin:18px 0 0}
+.fixture-finder .filter-menu{max-width:100%;position:static}.fixture-finder .filter-menu>summary{font-size:13px;padding:10px}
+.fixture-finder .filter-menu>summary span{max-width:none;white-space:normal}
+.fixture-finder .filter-options{position:static;width:100%;max-width:100%;margin-top:6px;box-shadow:none}
+.fixture-finder .calendar{grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));gap:20px;align-items:stretch}
+.fixture-card{min-width:0;background:#fff;border:1px solid #dce4de;border-radius:12px;overflow:hidden}
+.fixture-date{display:flex;align-items:center;gap:14px;padding:14px 20px;border-bottom:1px solid #e1e7e3;font-variant-numeric:tabular-nums}
+.fixture-date b{font-size:30px;line-height:1.2}.fixture-date span{font-size:14px;font-weight:700;text-transform:uppercase}.fixture-date strong{font-size:16px;margin-left:6px}
+.fixture-body{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:20px;padding:20px}
+.fixture-details{min-width:0}.fixture-details h3{font-size:18px;line-height:1.4;font-weight:800;margin:0 0 5px;overflow-wrap:break-word}.fixture-details h3 a{color:var(--ink);text-decoration:none}
+.fixture-price{font-size:13px;color:var(--muted);margin:0 0 12px}.fixture-competition{display:inline-block;max-width:100%;white-space:normal;overflow-wrap:break-word;margin-bottom:10px}.fixture-venue{margin:0;font-size:14px;overflow-wrap:break-word}.fixture-venue a{color:var(--muted)}
+.fixture-body>.button{padding:10px 14px;white-space:nowrap}
+.filter-toggle{display:none}.filter-actions[hidden],.filter-toggle[hidden]{display:none}
+@media(max-width:1000px){
+ .fixture-finder .finder-layout{grid-template-columns:minmax(0,1fr)}
+ .fixture-finder .finder-sidebar{position:static;max-height:none;overflow:visible}
+ .finder-panel:not([open]){display:none}
+ .finder-panel[open]{position:fixed;inset:0;width:100%;height:100dvh;max-height:100dvh;margin:0;padding:64px 20px 90px;overflow:auto;background:var(--bg);border-radius:0}
+ .finder-panel::backdrop{background:var(--bg)}
+ .filter-toggle{display:block;position:fixed;top:50%;z-index:10;padding:12px;box-shadow:0 2px 12px #10201a25}
+ .filter-open{left:0;border-radius:0 8px 8px 0}.filter-close{right:0;border-radius:8px 0 0 8px}
+ .filter-actions{display:flex;position:fixed;bottom:0;left:0;right:0;justify-content:flex-end;gap:12px;padding:16px 20px max(16px,env(safe-area-inset-bottom));background:#fff;border-top:1px solid #dce4de}
+ .fixture-finder .calendar{gap:16px}.fixture-finder{padding-bottom:60px}
+}
+@media(max-width:400px){.fixture-body{padding:16px;gap:12px}.fixture-details h3{font-size:16px}.fixture-body>.button{padding:9px 11px}.fixture-date{padding:12px 16px;gap:10px}}
