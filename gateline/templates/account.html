@@ -1,4 +1,10 @@
-{% extends 'base.html' %}{% block content %}<div class="compact-head"><div><p class="eyebrow">SUPPORTER DASHBOARD</p><h1>Your Matches</h1><p>Hello, {{user.name}} · Fixtures from your clubs and bookings.</p></div></div>
-<section id="notifications"><h2>Notifications</h2><div class="cards">{% for e in notices %}<article class="portal-row"><div><b>{{'Claim your free season-ticket match ticket' if e.id in claimable else 'Tickets available'}}: {{e.home_team}} v {{e.away_team}}</b><p>{{local_time(e.starts_at).strftime('%d %b %Y · %H:%M')}} · {{e.competition}}</p></div><a href="/events/{{e.id}}" class="button">{{'Claim ticket' if e.id in claimable else 'View tickets'}}</a></article>{% else %}<p class="empty">You're up to date. Ticket availability and claims for your clubs will appear here.</p>{% endfor %}</div></section>
-<section id="your-matches"><h2>Your Matches</h2><div class="cards profile-matches">{% set show_match_dates=true %}{% for e in personal_events %}{% include '_personal_match.html' %}{% else %}<p class="empty">No upcoming matches for your clubs. <a href="/account/settings">Choose clubs to follow</a>.</p>{% endfor %}</div></section>
-<section id="other-matches"><h2>All other matches</h2><div class="cards profile-matches">{% set show_match_dates=true %}{% for e in other_events %}{% include '_match.html' %}{% else %}<p class="empty">No other upcoming matches.</p>{% endfor %}</div></section>{% endblock %}
+{% extends 'base.html' %}{% block main_class %}fixture-finder supporter-dashboard{% endblock %}{% block content %}
+<section class="compact-head"><div><p class="eyebrow">SUPPORTER DASHBOARD</p><h1>Dashboard</h1><p>Hello, {{user.name}} · Fixtures from your clubs and bookings.</p></div></section>
+<section id="your-matches"><div class="section-title"><h2>Your Matches</h2><span>{{personal_events|length}} matches</span></div><div class="calendar">
+{% for e in personal_events %}{% include '_fixture_card.html' %}{% else %}<p class="empty">No upcoming matches for your clubs.</p>{% endfor %}
+</div></section>
+<section id="other-matches"><div class="section-title"><h2>All other matches</h2><span>{{other_events|length}} matches</span></div><div class="calendar">
+{% for e in other_events %}{% include '_fixture_card.html' %}{% else %}<p class="empty">No other upcoming matches.</p>{% endfor %}
+</div></section>
+{% if notices %}<section id="notifications"><h2>Notifications</h2><div class="cards">{% for e in notices %}<article class="portal-row"><div><b>{{'Claim your free season-ticket match ticket' if e.id in claimable else 'Tickets available'}}: {{e.title}}</b><p>{{local_time(e.starts_at).strftime('%d %b %Y · %H:%M')}}</p></div><a href="/events/{{e.id}}" class="button">{{'Claim ticket' if e.id in claimable else 'View tickets'}}</a></article>{% endfor %}</div></section>{% endif %}
+{% endblock %}

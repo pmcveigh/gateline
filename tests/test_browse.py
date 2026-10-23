@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from html.parser import HTMLParser
-from urllib.parse import quote, parse_qs, urlsplit
+from urllib.parse import quote, parse_qs, urlsplit, urlencode
 
 import pytest
 from fastapi.testclient import TestClient
@@ -22,12 +22,16 @@ class BrowseParser(HTMLParser):
     def __init__(self, html):
         super().__init__()
         self.selected = []
+        self.selected_values = {}
         self.open_leagues = 0
         self.events = []
         self.feed(html)
+        if self.selected_values: self.selected = ["/?" + urlencode(self.selected_values, doseq=True)]
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
+        if tag == "input" and "checked" in attrs:
+            self.selected_values.setdefault(attrs["name"], []).append(attrs["value"])
         if tag == "a" and attrs.get("aria-current") == "true" and "club-card" in attrs.get("class", "").split():
             self.selected.append(attrs["href"])
         if tag == "details" and attrs.get("class") == "league-group" and "open" in attrs:
@@ -92,11 +96,11 @@ def test_directory_includes_all_four_leagues_without_requiring_fixtures(client):
     assert "Ballyclare Comrades" in response.text
     assert "Limavady United" in response.text
     assert "Other clubs" not in response.text
-    assert BrowseParser(response.text).open_leagues == 1
+    assert BrowseParser(response.text).open_leagues == 0
     empty = client.get("/", params={"club": "Ballyclare Comrades"})
     assert empty.status_code == 200
     assert "No fixtures match these filters." in empty.text
-    assert BrowseParser(empty.text).open_leagues == 1
+    assert BrowseParser(empty.text).open_leagues == 0
     profile = client.get("/clubs/Ballyclare%20Comrades")
     assert profile.status_code == 200
     assert "Dixon Park" in profile.text
@@ -108,10 +112,10 @@ def test_womens_filter_is_distinct_from_mens_and_keeps_other_filters(client):
     assert response.status_code == 200
     parsed = BrowseParser(response.text)
     assert set(parsed.events) == {"/events/2"}
-    assert parsed.open_leagues == 1
+    assert parsed.open_leagues == 0
     assert len(parsed.selected) == 1
     selected=parse_qs(urlsplit(parsed.selected[0]).query)
-    assert selected=={"club":["Cliftonville Ladies"],"venue":["1"],"competition":["NIFL Women’s Premiership 2026"]}
+    assert selected=={"club":["Cliftonville Ladies"],"venue":["1"],"competition":["NIFL Women's Premiership"]}
     mens = client.get("/", params={"club": "Cliftonville"})
     assert set(BrowseParser(mens.text).events) == {"/events/1"}
 
@@ -166,27 +170,27 @@ def test_mixed_ticket_reservation_post_and_checkout_keep_prices_and_expiry(clien
     assert "£15.00" in first.text and "£1.00" in first.text
     expiry=lambda html: re.search(r'data-expires="(\d+)"',html).group(1)
     assert expiry(first.text)==expiry(second.text)
-    response=client.post(location,data={"full_name":"Test Fan","email":"fan@example.com","address1":"1 Road","city":"Belfast","postcode":"BT1","country":"UK","attendee_birth_dates":["", "2018-01-01"]})
+    response=client.post(location,data={"full_name":"Test Fan","email":"fan@example.com","address1":"1 Road","city":"Belfast","postcode":"BT1","country":"UK","attendee_birth_dates":["", "2018-01-01"],"attendee_names":["Test Fan", "Child Fan"]})
     assert response.status_code==200 and "Total £16.00" in response.text
 
 
-def test_top_filter_buttons_replace_date_and_per_fixture_counts(client):
+def test_sidebar_filters_replace_date_and_per_fixture_counts(client):
     response=client.get("/",params={"club":"Cliftonville","venue":1,"competition":"NIFL Premiership 2026/27","date":"1999-01-01"})
     assert response.status_code==200
     assert set(BrowseParser(response.text).events)=={"/events/1"}
-    assert 'class="quick-filters"' in response.text
+    assert 'id="fixture-filters"' in response.text
     assert '<select name="venue"' not in response.text and '<select name="competition"' not in response.text
     assert 'name="date"' not in response.text and 'date=' not in response.text
     assert '<em>' not in response.text
     assert '<summary>Stadium' in response.text and '<summary>Competition' in response.text
 
 
-def test_ticket_selection_starts_empty_and_does_not_disclose_stock(client):
+def test_ticket_selection_starts_at_zero_and_does_not_disclose_stock(client):
     import re
     response=client.get("/events/5")
     assert response.status_code==200
     assert re.findall(r'name="ticket_quantities"[^>]*value="([^"]*)"',response.text)
-    assert set(re.findall(r'name="ticket_quantities"[^>]*value="([^"]*)"',response.text))=={""}
+    assert set(re.findall(r'name="ticket_quantities"[^>]*value="([^"]*)"',response.text))=={"0"}
     assert "100 available" not in response.text and " tickets left" not in response.text
     empty=client.post("/events/5/reserve",data={"section_id":1},follow_redirects=False)
     assert empty.status_code==409

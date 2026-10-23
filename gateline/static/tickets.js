@@ -10,9 +10,5 @@ for (const form of document.querySelectorAll('.ticket-selection')) {
     form.querySelector('.selection-total').textContent = `${count} ticket${count === 1 ? '' : 's'} · ${currency.format(pence / 100)}`;
   }
   form.addEventListener('input', update);
-  form.addEventListener('submit', () => {
-    const seats = form.querySelector('[name=seat_ids]');
-    if (seats) seats.value = [...form.querySelectorAll('[name=seat_choice]:checked')].map(input => input.value).join(',');
-  });
   update();
 }

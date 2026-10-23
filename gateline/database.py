@@ -78,7 +78,7 @@ def upgrade_schema():
             "users":{"username":"VARCHAR(30)","managed_club":"VARCHAR(150)"},
             "season_tickets":{"product_id":"INTEGER REFERENCES season_products(id)","issuance_token":"VARCHAR(100)"},
             "orders":{"supporter_id":"INTEGER REFERENCES users(id)"},
-            "tickets":{"attendee_user_id":"INTEGER REFERENCES users(id)","attendee_birth_date":"DATE","season_ticket_id":"INTEGER REFERENCES season_tickets(id)"},
+            "tickets":{"attendee_name":"VARCHAR(120)","attendee_user_id":"INTEGER REFERENCES users(id)","attendee_birth_date":"DATE","season_ticket_id":"INTEGER REFERENCES season_tickets(id)"},
             "club_pricing":{"portal_defaults_applied":"BOOLEAN NOT NULL DEFAULT FALSE"},
         }
         for table,fields in additions.items():

@@ -34,12 +34,12 @@ def lookup(db,event_id):
 def test_default_matches_page_is_separate_from_stats_settings_tickets_and_history(cup):
     client,_,_=cup;sign_in(client)
     page=client.get('/account')
-    assert page.text.index('id="notifications"')<page.text.index('id="your-matches"')<page.text.index('id="other-matches"')
+    assert page.text.index('id="your-matches"')<page.text.index('id="other-matches"')<page.text.index('id="notifications"')
     assert 'class="stats dashboard"' not in page.text
     assert 'name="force_concession"' not in page.text and '<h2>Booking history' not in page.text
     profile=client.get('/account/profile');assert 'Matches bought' in profile.text and 'Matches attended' in profile.text
     assert 'name="force_concession"' not in profile.text
-    settings=client.get('/account/settings');assert 'name="force_concession"' in settings.text and 'name="birth_date"' in settings.text and 'name="new_password"' in settings.text
+    settings=client.get('/account/settings');assert 'name="force_concession"' in settings.text and 'name="birth_date"' not in settings.text and 'name="new_password"' in settings.text
     assert client.get('/account/tickets').status_code==200
     assert client.get('/account/history').status_code==200
 
@@ -244,7 +244,7 @@ def test_cancelled_claim_is_not_reissued_and_cancelled_fixture_does_not_admit(cu
         assert db.scalar(select(SupporterAttendance.id)) is None
 
 
-def test_railway_seats_are_printed_and_occupied_seats_are_disabled(cup):
+def test_existing_railway_seats_print_without_exposing_seat_picker(cup):
     client,engine,event_id=cup
     client.post('/account/login',data={'identity':'linfieldfan','password':'Linfield123!'})
     client.post(f'/events/{event_id}/away-access',data={'season_number':'LF12345'})
@@ -262,4 +262,5 @@ def test_railway_seats_are_printed_and_occupied_seats_are_disabled(cup):
     printed=client.get('/tickets/'+public_id)
     assert 'Seat A-1' in printed.text and 'Away supporter' in printed.text
     page=client.get(f'/events/{event_id}')
-    assert f'name="seat_choice" value="{seat_id}" disabled' in page.text
+    assert 'name="seat_choice"' not in page.text
+    assert 'Seats allocated automatically' in page.text

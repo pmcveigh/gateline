@@ -58,7 +58,7 @@ def claim_season_ticket(db,event_id,supporter,membership_id,seat_id=None):
     if restriction(tc) in ('vip','child'): validate_attendees(event,[(tc,1)],profile,0,[''])
     # The verified season category authorises the free claim, independently of
     # the paid basket's discount/guardian rules. The allocation was checked above.
-    row=reserve(db,event.id,inventory.section_id,1,[seat_id] if seat_id else [],supporter=supporter)
+    row=reserve(db,event.id,inventory.section_id,1,[seat_id] if seat_id else [],supporter=supporter,auto_assign=True)
     customer=Customer(full_name=st.full_name,email=st.email,**{key:getattr(profile,key) if profile else '' for key in ('address1','address2','city','postcode','country')})
     db.add(customer);db.flush()
     order=Order(reference='GL-'+secrets.token_hex(4).upper(),customer_id=customer.id,event_id=event.id,supporter_id=supporter.id,subtotal=Decimal('0'),discount=Decimal('0'),total=Decimal('0'),payment_status='successful',status='complete')
@@ -67,7 +67,7 @@ def claim_season_ticket(db,event_id,supporter,membership_id,seat_id=None):
     changed=db.execute(update(Reservation).where(Reservation.id==row.id,Reservation.completed==False,Reservation.expires_at>now).values(completed=True).execution_options(synchronize_session='fetch'))
     if changed.rowcount!=1:
         db.rollback();raise ValueError('The claim reservation expired. Try again.')
-    ticket=Ticket(public_id=ticket_prefix(event.home_team)+'-'+secrets.token_hex(6).upper(),qr_token=secrets.token_urlsafe(32),order_id=order.id,event_id=event.id,section_id=inventory.section_id,seat_id=seat_id,ticket_class_id=tc.id,price=Decimal('0'),status='sold',complimentary=True,attendee_user_id=supporter.id,attendee_birth_date=profile.birth_date if profile else None,season_ticket_id=st.id)
+    ticket=Ticket(public_id=ticket_prefix(event.home_team)+'-'+secrets.token_hex(6).upper(),qr_token=secrets.token_urlsafe(32),order_id=order.id,event_id=event.id,section_id=inventory.section_id,seat_id=row.seat_id,attendee_name=st.full_name,ticket_class_id=tc.id,price=Decimal('0'),status='sold',complimentary=True,attendee_user_id=supporter.id,attendee_birth_date=profile.birth_date if profile else None,season_ticket_id=st.id)
     db.add(ticket)
     try: db.commit()
     except IntegrityError:

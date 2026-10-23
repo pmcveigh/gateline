@@ -20,15 +20,19 @@ function rebuildLegacy() {
       const radio = document.createElement('input');radio.type = 'radio';radio.name = 'personal_index';radio.value = i;radio.checked = i === 0;
       label.append(radio, 'This is my ticket');card.append(label);
     }
-    const label = document.createElement('label');label.textContent = 'Attendee date of birth';
-    const born = document.createElement('input');born.type = 'date';born.name = 'attendee_birth_dates';label.append(born);card.append(label);
+    const nameLabel = document.createElement('label');nameLabel.textContent = "Ticket holder's full name";
+    const fullName = document.createElement('input');fullName.name = 'attendee_names';fullName.required = true;fullName.maxLength = 120;nameLabel.append(fullName);card.append(nameLabel);
+    const label = document.createElement('label');label.textContent = 'Attendee date of birth';label.className = 'attendee-dob';
+    const born = document.createElement('input');born.name = 'attendee_birth_dates';
+    if (['vip','child','concession'].includes(card.dataset.kind)) { born.type = 'date';label.append(born);card.append(label); }
+    else { born.type = 'hidden';card.append(born); }
     if (['concession', 'disability'].includes(card.dataset.kind)) {
       const access = document.createElement('label');access.className = 'checkbox-label guest-disability';
       const box = document.createElement('input');box.type = 'checkbox';box.name = 'disability_indices';box.value = i;
       access.append(box,'Disability concession / access eligibility for this guest');card.append(access);
     }
     const detail = document.createElement('small');
-    detail.textContent = card.dataset.kind === 'concession' ? `Under ${option.dataset.under} or over ${option.dataset.over}, or disability concession.` : card.dataset.kind === 'child' ? 'Under 11, with a paying adult.' : card.dataset.kind === 'vip' ? 'Aged 18 and above.' : 'Date of birth is optional for an Adult ticket.';
+    detail.textContent = card.dataset.kind === 'concession' ? `Under ${option.dataset.under} or over ${option.dataset.over}, or disability concession.` : card.dataset.kind === 'child' ? 'Under 11, with a paying adult.' : card.dataset.kind === 'vip' ? 'Aged 18 and above.' : '';
     card.append(detail);cards.append(card);
   }
 }
@@ -38,14 +42,24 @@ function updateBooking() {
   const ownIndex = personal ? Number(form.querySelector('[name=personal_index]:checked')?.value ?? -1) : -1;
   attendees.forEach((card,index) => {
     const own = index === ownIndex;
+    const wasOwn = card.dataset.own === 'true';
+    const name = card.querySelector('[name=attendee_names]');
+    if (own && !wasOwn) { name.dataset.guestValue = name.value;name.value = form.dataset.fullName; }
+    if (!own && wasOwn) name.value = name.dataset.guestValue || '';
+    name.readOnly = own;
     const date = card.querySelector('[name=attendee_birth_dates]');
-    if (own && !date.readOnly) { date.dataset.guestValue = date.value;date.value = form.dataset.birthDate; }
-    if (!own && date.readOnly) date.value = date.dataset.guestValue || '';
-    date.readOnly = own;
     const access = card.querySelector('[name=disability_indices]');
     if (access) { access.disabled = own;access.closest('label').hidden = own; }
     const forced = own ? form.dataset.forceConcession === 'true' : !!access?.checked;
-    date.required = ['vip','child'].includes(card.dataset.kind) || (card.dataset.kind === 'concession' && !forced);
+    const ageRequired = ['vip','child'].includes(card.dataset.kind) || (card.dataset.kind === 'concession' && !forced);
+    if (date.type === 'date') {
+      if (own && !wasOwn && form.dataset.birthDate) { date.dataset.guestValue = date.value;date.value = form.dataset.birthDate; }
+      if (!own && wasOwn && form.dataset.birthDate) date.value = date.dataset.guestValue || '';
+      date.readOnly = own && !!form.dataset.birthDate;
+      date.required = ageRequired;
+      date.closest('label').hidden = !ageRequired;
+    }
+    card.dataset.own = String(own);
   });
   const vipCount = attendees.filter(card => card.dataset.vip === 'true').length;
   const ownVip = ownIndex >= 0 && attendees[ownIndex]?.dataset.vip === 'true';

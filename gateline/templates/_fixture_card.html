@@ -7,8 +7,9 @@
    <h3><a href="/events/{{e.id}}">{{e.title}}</a></h3>
    <p class="fixture-price">{% if adult_price is not none %}Tickets from £{{'%.2f'|format(adult_price)}}{% else %}Adult tickets unavailable{% endif %}</p>
    <a class="tag fixture-competition" href="/competitions/{{quote(e.competition, safe='')}}" title="{{e.competition}}">{{e.competition}}</a>
+   {% if covered is defined and e.id in covered %}<span class="pill">Covered by season ticket</span>{% elif claimed is defined and e.id in claimed %}<span class="pill">Season-ticket match ticket claimed</span>{% elif claimable is defined and e.id in claimable %}<span class="pill">Free ticket · claim required</span>{% endif %}
    <p class="fixture-venue"><a href="/venues/{{e.venue_id}}">{{e.venue.name}}</a></p>
   </div>
-  <a class="button" href="/events/{{e.id}}" aria-label="Tickets for {{e.title}}">Tickets</a>
+  {% if tickets_by_event is defined and e.id in tickets_by_event %}<a class="button" href="/tickets/{{tickets_by_event[e.id][0].public_id}}?back=/account">View tickets</a>{% else %}<a class="button" href="/events/{{e.id}}" aria-label="Tickets for {{e.title}}">Tickets</a>{% endif %}
  </div>
 </article>

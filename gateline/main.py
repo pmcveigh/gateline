@@ -3,10 +3,10 @@ from io import BytesIO, StringIO
 from decimal import Decimal
 from pathlib import Path
 from typing import Annotated
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 from zoneinfo import ZoneInfo
 import csv, json, os, qrcode, secrets
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, Query
 from pydantic import BeforeValidator
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -72,9 +72,15 @@ OptionalVenueId=Annotated[int|None,BeforeValidator(lambda value: None if value==
 def utc_dt(value):
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
+COMPETITION_ORDER = ("NIFL Premiership", "NIFL Championship", "NCL Premier", "Irish Cup", "NIFL League Cup", "NIFL Women's Premiership", "Other")
+
+def competition_group(name):
+    normal=name.replace("’", "'").casefold()
+    return next((group for group in COMPETITION_ORDER[:-1] if normal.startswith(group.casefold())), "Other")
+
 def fixture_filter_url(filters, **changes):
     values={**filters,**changes}
-    query=urlencode({key:values[key] for key in ("club","venue","competition") if values.get(key) not in (None,"")})
+    query=urlencode({key:values[key] for key in ("club","venue","competition") if values.get(key) not in (None, "", [])},doseq=True)
     return "/?"+query if query else "/"
 
 def local_time(value):
@@ -90,20 +96,21 @@ def build_calendar(events):
     return calendar
 
 @app.get("/",response_class=HTMLResponse)
-def home(request:Request,club:str="",venue:OptionalVenueId=None,competition:str="",db:Session=Depends(get_db)):
-    query=select(Event).options(selectinload(Event.classes)).where(Event.published==True,Event.cancelled==False,Event.starts_at>=datetime.now(timezone.utc))
-    directory_club=find_club(club)
-    if club:
-        names=directory_club.filter_names if directory_club else (club,)
+def home(request:Request,club:list[str]=Query([]),venue:list[OptionalVenueId]=Query([]),competition:list[str]=Query([]),db:Session=Depends(get_db)):
+    query=select(Event).options(selectinload(Event.classes)).where(Event.published==True,Event.cancelled==False,Event.archived==False,Event.starts_at>=datetime.now(timezone.utc))
+    selected_clubs=list(dict.fromkeys(find_club(name).name if find_club(name) else name for name in club if name))
+    selected_venues=[value for value in dict.fromkeys(venue) if value is not None]
+    selected_competitions=list(dict.fromkeys(competition_group(name) if name not in COMPETITION_ORDER else name for name in competition if name))
+    if selected_clubs:
+        names={alias for name in selected_clubs for alias in (find_club(name).filter_names if find_club(name) else (name,))}
         query=query.where(or_(Event.home_team.in_(names),Event.away_team.in_(names)))
-    if venue: query=query.where(Event.venue_id==venue)
-    if competition: query=query.where(Event.competition==competition)
-    events=db.scalars(query.order_by(Event.starts_at)).all()
+    if selected_venues: query=query.where(Event.venue_id.in_(selected_venues))
+    known=db.scalars(select(Event.competition).where(Event.published==True).distinct()).all()
+    if selected_competitions: query=query.where(Event.competition.in_([name for name in known if competition_group(name) in selected_competitions]))
+    events=db.scalars(query.order_by(Event.starts_at,Event.id)).all()
     clubs=sorted({name for event in db.scalars(select(Event).where(Event.published==True)) for name in (event.home_team,event.away_team)})
     venues=db.scalars(select(Venue).join(Event).where(Event.published==True).distinct().order_by(Venue.name)).all()
-    competitions=db.scalars(select(Event.competition).where(Event.published==True).distinct().order_by(Event.competition)).all()
-    calendar=build_calendar(events)
-    return render(request,"home.html",events=events,calendar=calendar,club_groups=build_club_groups(clubs),venues=venues,competitions=competitions,filters={"club":directory_club.name if directory_club else club,"venue":venue,"competition":competition})
+    return render(request,"home.html",events=events,calendar=build_calendar(events),club_groups=build_club_groups(clubs),venues=venues,competitions=COMPETITION_ORDER,filters={"club":selected_clubs,"venue":selected_venues,"competition":selected_competitions})
 @app.get("/clubs/{name}",response_class=HTMLResponse)
 def club_profile(name:str,request:Request,db:Session=Depends(get_db)):
     directory_club=find_club(name)
@@ -185,7 +192,7 @@ def make_reservation(event_id:int,request:Request,section_id:int=Form(),quantity
             selection={class_id:count for class_id,count in zip(class_ids,counts) if count!=0}
             quantity=sum(selection.values())
         supporter=request.state.user if request.state.user and request.state.user.role=='supporter' else None
-        r=reserve(db,event_id,section_id,quantity,[int(x) for x in seat_ids.split(",") if x],selection,supporter=supporter,away_season_number=away_season_number)
+        r=reserve(db,event_id,section_id,quantity,[],selection,supporter=supporter,away_season_number=away_season_number,auto_assign=True)
     except ValueError as e: return render_event(request,db,event_id,selection,str(e),409)
     return RedirectResponse(f"/checkout/{r.token}",303)
 @app.get("/checkout/{token}",response_class=HTMLResponse)
@@ -221,11 +228,11 @@ def render_checkout(request,db,token,form=None,error=None,status_code=200):
     if away_booking and (not supporter or supporter.id!=stored.get('supporter_id')): raise HTTPException(404)
     return render(request,"checkout.html",status_code=status_code,reservation=r,event=event,lines=lines,units=units,quantity=quantity,ticket_subtotal=ticket_subtotal,vip_count=vip_count,vip_min_age=VIP_MIN_AGE,selection=selection,form=form,error=error,supporter_profile=profile,restriction=restriction,away_booking=away_booking,vip_discount_allowed=not away_booking and club_key(event.home_team)==club_key("Glentoran"),expired=expired,expires_ms=int((now if expired else utc_dt(r.expires_at)).timestamp()*1000),server_now_ms=int(now.timestamp()*1000))
 @app.post("/checkout/{token}")
-def complete(token:str,request:Request,full_name:str=Form(),email:str=Form(),address1:str=Form(),address2:str=Form(""),city:str=Form(),postcode:str=Form(),country:str=Form(),class_id:int|None=Form(None),priority_code:str=Form(""),voucher_code:str=Form(""),test_result:str=Form("success"),vip_season_holder:bool=Form(False),vip_birth_dates:list[str]=Form([]),personal_index:int=Form(-1),attendee_birth_dates:list[str]=Form([]),disability_indices:list[int]=Form([]),db:Session=Depends(get_db)):
+def complete(token:str,request:Request,full_name:str=Form(),email:str=Form(),address1:str=Form(),address2:str=Form(""),city:str=Form(),postcode:str=Form(),country:str=Form(),class_id:int|None=Form(None),priority_code:str=Form(""),voucher_code:str=Form(""),test_result:str=Form("success"),vip_season_holder:bool=Form(False),vip_birth_dates:list[str]=Form([]),personal_index:int=Form(-1),attendee_birth_dates:list[str]=Form([]),attendee_names:list[str]=Form([]),disability_indices:list[int]=Form([]),db:Session=Depends(get_db)):
     customer=dict(full_name=full_name,email=email,address1=address1,address2=address2,city=city,postcode=postcode,country=country)
     supporter=request.state.user if request.state.user and request.state.user.role=="supporter" else None
-    try: order=checkout(db,token,class_id,customer,test_result,priority_code or None,voucher_code or None,vip_season_holder,vip_birth_dates,supporter=supporter,personal_index=personal_index if personal_index!=-1 else None,attendee_birth_dates=attendee_birth_dates or None,disability_indices=disability_indices)
-    except ValueError as e: return render_checkout(request,db,token,{**customer,"class_id":class_id,"priority_code":priority_code,"voucher_code":voucher_code,"vip_season_holder":vip_season_holder,"vip_birth_dates":vip_birth_dates,"attendee_birth_dates":attendee_birth_dates,"personal_index":personal_index,"disability_indices":disability_indices},str(e),400)
+    try: order=checkout(db,token,class_id,customer,test_result,priority_code or None,voucher_code or None,vip_season_holder,vip_birth_dates,supporter=supporter,personal_index=personal_index if personal_index!=-1 else None,attendee_birth_dates=attendee_birth_dates or None,disability_indices=disability_indices,attendee_names=attendee_names)
+    except ValueError as e: return render_checkout(request,db,token,{**customer,"class_id":class_id,"priority_code":priority_code,"voucher_code":voucher_code,"vip_season_holder":vip_season_holder,"vip_birth_dates":vip_birth_dates,"attendee_birth_dates":attendee_birth_dates,"attendee_names":attendee_names,"personal_index":personal_index,"disability_indices":disability_indices},str(e),400)
     return RedirectResponse(f"/orders/{order.reference}?access={order.access_token}",303)
 @app.get("/orders/{reference}",response_class=HTMLResponse)
 def confirmation(reference:str,request:Request,access:str="",db:Session=Depends(get_db)):
@@ -239,7 +246,19 @@ def ticket_view(public_id:str,request:Request,access:str="",db:Session=Depends(g
     if not ticket: raise HTTPException(404)
     if not owns_order(request,ticket.order) and not secrets.compare_digest(access,ticket.order.access_token): raise HTTPException(404)
     seat_label=f'{db.get(SeatRow,ticket.seat.row_id).name}-{ticket.seat.number}' if ticket.seat else None
-    return render(request,"ticket.html",ticket=ticket,event=db.get(Event,ticket.event_id),seat_label=seat_label,access=access)
+    if request.state.user and request.state.user.role=="supporter" and ticket.order.supporter_id==request.state.user.id:
+        siblings=db.scalars(select(Ticket).join(Order).where(Ticket.event_id==ticket.event_id,Order.supporter_id==request.state.user.id,Order.payment_status=="successful",Ticket.status.in_(["sold","scanned"])).order_by(Ticket.id)).all()
+    else:
+        siblings=[item for item in ticket.order.tickets if item.status in ("sold","scanned")]
+    if ticket not in siblings: siblings.insert(0,ticket)
+    fallback="/account/tickets" if request.state.user and request.state.user.role=="supporter" else f"/orders/{ticket.order.reference}?access={access}"
+    back=request.query_params.get("back", "")
+    referrer=urlsplit(request.headers.get("referer", ""))
+    if not back and referrer.netloc==request.url.netloc and not referrer.path.startswith("/tickets/"):
+        back=referrer.path+("?"+referrer.query if referrer.query else "")
+    if not back.startswith("/") or back.startswith("//") or "\\" in back: back=fallback
+    return render(request,"ticket.html",ticket=ticket,event=db.get(Event,ticket.event_id),seat_label=seat_label,access=access,sibling_tickets=siblings,back_url=back)
+
 @app.get("/tickets/{public_id}/qr.png")
 def qr(public_id:str,request:Request,access:str="",db:Session=Depends(get_db)):
     ticket=db.scalar(select(Ticket).where(Ticket.public_id==public_id));

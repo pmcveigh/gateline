@@ -52,7 +52,7 @@ def register_supporter(db, username, full_name, email, password, confirmation, b
     if len(email)>200 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+",email): raise ValueError("Enter a valid email address")
     if len(password)<8 or len(password.encode())>72: raise ValueError("Use a password of at least 8 characters and no more than 72 bytes")
     if password!=confirmation: raise ValueError("Passwords do not match")
-    born=parse_birth_date(birth_date,True);interests=clean_interests(db,clubs)
+    born=parse_birth_date(birth_date);interests=clean_interests(db,clubs)
     if db.scalar(select(User).where((func.lower(User.email)==email)|(User.username==username))): raise ValueError("That username or email is already in use")
     user=User(username=username,name=full_name,email=email,password_hash=hash_password(password),role="supporter")
     try:
@@ -73,7 +73,7 @@ def profile_for(db,user):
 
 def save_profile(db,user,full_name,birth_date,clubs,force_concession,disability_type,access_details,share_access_needs,address1,address2,city,postcode,country):
     if not full_name.strip() or len(full_name.strip())>120: raise ValueError("Enter your full name")
-    born=parse_birth_date(birth_date,True);interests=clean_interests(db,clubs)
+    born=parse_birth_date(birth_date) if birth_date else profile_for(db,user).birth_date;interests=clean_interests(db,clubs)
     if len(disability_type)>300 or len(access_details)>2000: raise ValueError("Keep the disability type under 300 characters and access details under 2,000")
     profile=profile_for(db,user);user.name=full_name.strip()
     profile.birth_date=born;profile.clubs_json=json.dumps(interests);profile.force_concession=force_concession
@@ -148,7 +148,7 @@ def validate_attendees(event,lines,profile,personal_index,birth_dates,disability
     day=london_date(event.starts_at);result=[]
     for index,(tc,raw) in enumerate(zip(units,birth_dates)):
         personal=profile is not None and index==personal_index
-        born=profile.birth_date if personal else parse_birth_date(raw)
+        born=(profile.birth_date or parse_birth_date(raw)) if personal else parse_birth_date(raw)
         disabled=(profile.force_concession or bool(profile.disability_type)) if personal else index in disability_indices
         forced=profile.force_concession if personal else index in disability_indices
         age=age_on(born,day);kind=restriction(tc)
@@ -175,7 +175,7 @@ def dashboard_data(db,user):
     season_attendance=Counter(admission.season_ticket_id for admission in admissions if admission.season_ticket_id)
     events=db.scalars(select(Event).where(Event.published==True,Event.cancelled==False,Event.archived==False,Event.starts_at>=datetime.now(timezone.utc)).options(selectinload(Event.classes))).all()
     fav=lambda event: club_key(event.home_team) in interests or club_key(event.away_team) in interests
-    events.sort(key=lambda event:(not fav(event),event.starts_at,event.id))
+    events.sort(key=lambda event:(event.starts_at,event.id))
     notices=[];covered={event.id for event in events if not event.season_claim_required and any(covers_event(st,event) for st in memberships)}
     previous_claims={ticket.event_id for order in successful for ticket in order.tickets if ticket.season_ticket_id}
     claimable={}
@@ -204,8 +204,12 @@ def dashboard_data(db,user):
     personal_events=[event for event in events if fav(event) or event.id in valid or event.id in covered or event.id in claimable]
     other_events=[event for event in events if event not in personal_events]
     attendance_history=[(admission,db.get(Event,admission.event_id)) for admission in sorted(admissions,key=lambda row:row.scanned_at,reverse=True)]
+    tickets_by_event={}
+    for order in successful:
+        for ticket in order.tickets:
+            if ticket.status in ("sold", "scanned"): tickets_by_event.setdefault(ticket.event_id, []).append(ticket)
     season_purchases=db.scalars(select(SeasonPurchase).where(SeasonPurchase.user_id==user.id).order_by(SeasonPurchase.created_at.desc())).all()
-    return dict(season_purchases=season_purchases,profile=profile,orders=orders,events=events,personal_events=personal_events,other_events=other_events,notices=notices,memberships=memberships,season_attendance=season_attendance,purchased=purchased,claimed=claimed,claimable=claimable,valid_bookings=valid,attendance_history=attendance_history,attended=attended,covered=covered,areas=areas,interests=interests)
+    return dict(tickets_by_event=tickets_by_event,season_purchases=season_purchases,profile=profile,orders=orders,events=events,personal_events=personal_events,other_events=other_events,notices=notices,memberships=memberships,season_attendance=season_attendance,purchased=purchased,claimed=claimed,claimable=claimable,valid_bookings=valid,attendance_history=attendance_history,attended=attended,covered=covered,areas=areas,interests=interests)
 
 
 def access_needs_for_event(db,event):
