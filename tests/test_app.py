@@ -16,18 +16,19 @@ def test_session_middleware_wraps_request_middleware():
 def test_club_filter_accepts_empty_venue():
     home_route = next(route for route in app.routes if getattr(route, "path", None) == "/")
     venue_query = next(param for param in home_route.dependant.query_params if param.name == "venue")
-    venue, errors = venue_query.validate("", {}, loc=("query", "venue"))
+    venue, errors = venue_query.validate([""], {}, loc=("query", "venue"))
 
-    assert venue is None
+    assert venue == [None]
     assert errors == []
 
 
-def test_home_uses_club_grid_and_expanded_calendar():
+def test_home_uses_compact_lists_and_fixture_cards():
     template = Path("gateline/templates/home.html").read_text()
 
-    assert 'class="club-grid"' in template
+    assert 'class="club-list"' in template
     assert '<select name="club">' not in template
-    assert '<details class="day" open>' in template
+    assert "_fixture_card.html" in template
+    assert 'class="league-group" open' not in template
 
 
 def test_calendar_orders_events_from_soonest_to_furthest():

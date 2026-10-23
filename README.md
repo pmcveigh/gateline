@@ -31,12 +31,15 @@ These credentials are created by `scripts/seed.py` and must not be used in produ
 * All 36 clubs and their 28 home stadiums, including grounds shared across teams
 
 ### Club browsing
-The fixture finder groups the supplied club directory into NIFL Premiership,
-NIFL Championship, NCL Premier and NIFL Women's. Club selection uses a sidebar,
-which collapses on mobile. Stadium and competition filters are small buttons above
-the fixtures; there is no date filter or per-day match count. League sections collapse
-to keep the picker compact; the selected club's league opens automatically. The
-48 directory clubs, including Limavady United in the Premiership, remain browsable without published fixtures. Existing fixture
+The fixture finder uses a sticky green sidebar for Club, Competition and Stadium,
+with every menu initially collapsed. Select multiple entries and use Apply filters;
+selecting an entry again clears it. Choices within each category match any selected
+value, and categories combine. Reset filters is a button at the top. On smaller
+screens the left-edge control opens full-screen filters with Apply and Cancel.
+Competition categories appear in the order Premiership, Championship, NCL Premier,
+Irish Cup, League Cup, Women's Premiership and Other. Fixture cards use the available
+width and show date/kick-off, title, minimum adult price, competition and stadium.
+The 48 directory clubs, including Limavady United in the Premiership, remain browsable without published fixtures. Existing fixture
 clubs outside this directory remain under Other clubs. Women's teams have
 separate filter identities, and straight/curly apostrophes in Queen's University
 resolve to the same fixtures. Directory stadium, location and capacity information
@@ -60,7 +63,7 @@ Startup adds the new defaults once to existing menus that have not been explicit
 edited by a club administrator. Existing configured prices and bespoke types are
 preserved. The old demo Concession £10 / Child £5 menu is replaced by the new
 Adult / Concession defaults without deleting historical class records or tickets.
-Ticket quantities start blank.
+Ticket quantities start at 0. Seat-picking controls are hidden for now; assigned sections allocate available seats automatically.
 Public ticket pages do not display remaining stock; server capacity checks and
 staff attendance statistics remain available.
 
@@ -78,15 +81,23 @@ a date of birth for an attendee under 11. Eligibility is checked on the server.
 
 ### Supporter portal
 Open `/register` to create an account, or `/account/login` to sign in with a
-username or email. The default **Your Matches** dashboard (`/account`) shows
-notifications first, then matches for followed clubs, existing bookings and season
-entitlements, with all other fixtures below. **Profile** (`/account/profile`) holds
-stats, season passes and section choices. All editable preferences, accessibility,
-contact/address details and password changes are together in **Settings**
-(`/account/settings`). **Your Tickets** (`/account/tickets`) opens bought and claimed
-match tickets for printing; **History** (`/account/history`) lists successful/failed
-bookings, claims and actual gate admissions. Email/password changes require the
-current password. Matching a guest order's email never grants account ownership.
+username or email. **Dashboard** (`/account`) uses the same chronological match
+cards as the public home screen, with **Your Matches** first and all other fixtures
+second. **All Matches** links to the public fixture finder. Profile and Settings
+are removed from navigation, while their existing routes remain available.
+**Your Tickets** groups tickets by fixture; full-name buttons switch between each
+holder's ticket and QR code. Back returns to the previous page even after switching
+tickets. Ticket access remains restricted to the booking owner or order access link.
+Older tickets without holder names fall back to their booking customer's name.
+Every newly purchased ticket collects a full name; personal tickets use the signed-in
+supporter's saved name. **History** lists bookings, claims and actual gate admissions.
+Email/password changes require the current password. Matching a guest order's email
+never grants account ownership.
+
+Date of birth is requested only for age-restricted ticket types. Registration and
+ordinary Adult bookings do not require one. Saved birth dates are reused for personal
+restricted tickets; a missing date can be entered at checkout and is saved after a
+successful personal booking. Disability concessions do not require an age check.
 
 Mark one paid-booking attendee as **This is my ticket** so their saved age and access
 preferences apply. Guest eligibility details are separate and guest scans do not
@@ -117,7 +128,7 @@ League fixtures retain their existing season-pass admission behavior.
 Away fans sign in and verify an active, account-owned **Linfield** season-ticket
 number to unlock the Glentoran away model: **Adult £15**, **Concession £8** and
 **Disabled £8**. Away areas are **City End** (general admission) and **Railway Stand**
-(assigned seating). Away access and section/class allocation are checked both when
+(seats allocated automatically). Away access and section/class allocation are checked both when
 reserving and at checkout. Home numbers and legacy priority identifiers cannot
 unlock away tickets. Away prices stay separate from the home club menu.
 
@@ -273,3 +284,5 @@ For a local phone test, generate a trusted development certificate (for example 
 Back up the database before upgrading. On startup Gateline applies the additive v0.1.8 columns to an existing database and generates access tokens for existing orders; it does not erase orders or tickets. `migrations/001_v0_1_8.sql` remains available for operators who manage schema changes separately and therefore disable application startup during deployment. Existing SQLite databases created before v0.1.8 also require a planned table rebuild to remove the legacy permanent `(event_id, seat_id)` reservation uniqueness constraint; do not wipe them. New installations receive the corrected schema. The demo seed is destructive and therefore intended only for a disposable development database; point `DATABASE_URL` at an isolated file before running it.
 
 All payment outcomes are simulations: no provider, credentials, email delivery or real customer data should be used. This release has not been validated against PostgreSQL or production traffic and must not be represented as fully production-ready. See `docs/MVP_CHECKLIST.md` for verified and outstanding scope.
+
+Migration `007_ticket_holder_names.sql` adds nullable ticket-holder names for existing databases; startup also applies this additive change automatically.

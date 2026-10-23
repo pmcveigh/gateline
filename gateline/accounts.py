@@ -33,7 +33,7 @@ def install_accounts(app, render):
         return render(request,'register.html',clubs=club_choices(db),form={})
 
     @app.post('/register')
-    def create_account(request:Request, username:str=Form(), full_name:str=Form(), email:str=Form(), password:str=Form(), confirmation:str=Form(), birth_date:str=Form(), clubs:list[str]=Form([]), db:Session=Depends(get_db)):
+    def create_account(request:Request, username:str=Form(), full_name:str=Form(), email:str=Form(), password:str=Form(), confirmation:str=Form(), birth_date:str=Form(""), clubs:list[str]=Form([]), db:Session=Depends(get_db)):
         try: user=register_supporter(db,username,full_name,email,password,confirmation,birth_date,clubs)
         except ValueError as error:
             return render(request,'register.html',status_code=400,clubs=club_choices(db),form=dict(username=username,full_name=full_name,email=email,birth_date=birth_date,clubs=clubs),error=str(error))
@@ -69,7 +69,7 @@ def install_accounts(app, render):
 
     @app.post('/account/profile')
     @app.post('/account/settings')
-    def update_profile(request:Request,full_name:str=Form(),birth_date:str=Form(),clubs:list[str]=Form([]),force_concession:bool=Form(False),disability_type:str=Form(''),access_details:str=Form(''),share_access_needs:bool=Form(False),address1:str=Form(''),address2:str=Form(''),city:str=Form(''),postcode:str=Form(''),country:str=Form('United Kingdom'),email:str|None=Form(None),current_password:str=Form(''),new_password:str=Form(''),password_confirmation:str=Form(''),user=Depends(require('supporter')),db:Session=Depends(get_db)):
+    def update_profile(request:Request,full_name:str=Form(),birth_date:str=Form(""),clubs:list[str]=Form([]),force_concession:bool=Form(False),disability_type:str=Form(''),access_details:str=Form(''),share_access_needs:bool=Form(False),address1:str=Form(''),address2:str=Form(''),city:str=Form(''),postcode:str=Form(''),country:str=Form('United Kingdom'),email:str|None=Form(None),current_password:str=Form(''),new_password:str=Form(''),password_confirmation:str=Form(''),user=Depends(require('supporter')),db:Session=Depends(get_db)):
         stored=db.get(User,user.id)
         try:
             contact=(email if email is not None else stored.email).strip().casefold()

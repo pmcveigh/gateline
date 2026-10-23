@@ -1,5 +1,6 @@
 :root{--green:#07583b;--lime:#c9f04b;--ink:#10201a;--muted:#63716b;--bg:#f4f6f3;--red:#bb3030}
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,sans-serif}
 a{color:var(--green)}
 a:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid #649b20;outline-offset:3px}
@@ -112,3 +113,23 @@ footer{text-align:center;color:var(--muted);padding:18px;font-size:12px}
  .fixture-finder .calendar{gap:16px}.fixture-finder{padding-bottom:60px}
 }
 @media(max-width:400px){.fixture-body{padding:16px;gap:12px}.fixture-details h3{font-size:16px}.fixture-body>.button{padding:9px 11px}.fixture-date{padding:12px 16px;gap:10px}}
+
+/* Shared supporter theme and compact, multiple-choice fixture filters. */
+:root{--card-bg:#eef0ee;--card-border:#000}
+.portal-row,.ticket-mini,.ticket-selection,.checkout,.auth,.admin-form,.stats>div,.empty{background:var(--card-bg);border:1px solid var(--card-border);border-radius:12px}
+.button.secondary{background:transparent;color:var(--green);border:1px solid var(--green)}
+.button.secondary:hover,.button.secondary[aria-current=page]{background:var(--green);color:#fff}
+.filter-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}.filter-heading h2{font-size:18px;margin:0}
+.fixture-finder .reset-filters{background:var(--lime);color:var(--ink);padding:7px 10px;text-decoration:none;border-radius:6px;font-size:12px;white-space:nowrap}
+.fixture-finder .filter-section{padding:0;margin:0;border-top:1px solid #ffffff30;background:transparent;border-radius:0;color:#fff}
+.filter-section>summary{display:flex;align-items:center;justify-content:space-between;padding:14px 0;font-weight:700;cursor:pointer;list-style:none}.filter-section>summary::-webkit-details-marker{display:none}.filter-section>summary::after{content:'+'}.filter-section[open]>summary::after{content:'−'}
+.fixture-finder .filter-check{display:flex;flex-direction:row;align-items:center;gap:9px;padding:8px 10px;margin:0;min-height:36px;font-size:13px;font-weight:500;line-height:1.4;border-bottom:1px solid #ffffff18;cursor:pointer;color:#fff}
+.filter-check input{flex:0 0 auto;accent-color:var(--lime);margin:0;width:16px;height:16px}.filter-check:has(input:checked){background:#ffffff18;color:var(--lime)}.filter-check:hover{background:#ffffff10}
+.fixture-finder .filter-section .filter-options{display:block;max-height:360px;overflow:auto}
+.finder-panel .filter-close{background:var(--lime);color:var(--ink)}
+.supporter-dashboard>section+section{margin-top:32px}.supporter-dashboard .calendar{grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));gap:20px;align-items:stretch}
+.ticket-controls{max-width:850px;margin:0 auto 18px;display:grid;gap:16px}.ticket-controls>a{justify-self:start}.ticket-switcher{display:flex;flex-wrap:wrap;gap:8px}.ticket-switcher .button{font-size:13px}.ticket-holder{text-align:center;font-size:18px;color:var(--green)}
+.attendee-dob[hidden]{display:none}
+@media print{.ticket-controls{display:none}}
+.filter-submit{margin-top:16px}.filter-submit button{width:100%;background:var(--lime);color:var(--ink)}
+@media(max-width:1000px){.filter-submit{display:none}}

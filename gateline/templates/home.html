@@ -4,32 +4,33 @@
 <button class="filter-toggle filter-open" type="button" aria-controls="fixture-filter-panel" aria-expanded="false" hidden>Filters →</button>
 <aside class="finder-sidebar" aria-label="Fixture filters"><dialog id="fixture-filter-panel" class="finder-panel" open aria-label="Fixture filters">
 <button class="filter-toggle filter-close" type="button" aria-label="Collapse filters" hidden>←</button>
-<div class="sidebar-content">
-<section class="club-picker" aria-labelledby="club-picker-title">
- <div class="section-title"><h2 id="club-picker-title">Browse by club</h2></div><a class="club-card {{'active' if not filters.club}}" href="{{filter_url(filters,club='')}}" {% if not filters.club %}aria-current="true"{% endif %}>All clubs</a>
+<form class="sidebar-content" id="fixture-filters" method="get" action="/">
+<div class="filter-heading"><h2>Filters</h2><button class="reset-filters" type="button">Reset filters</button></div>
+<details class="filter-section club-picker">
+ <summary id="club-picker-title">Club</summary>
  <div class="league-list">
  {% for league, league_clubs in club_groups %}
-  <details class="league-group" {% if filters.club in league_clubs|map(attribute='name')|list or (not filters.club and loop.first) %}open{% endif %}>
-   <summary><span>{{league}}</span><small>{{league_clubs|length}} club{{'' if league_clubs|length==1 else 's'}}</small></summary>
+  <details class="league-group">
+   <summary><span>{{league}}</span><small>{{league_clubs|length}} clubs</small></summary>
    <ul class="club-list">
-   {% for item in league_clubs %}<li><a class="club-card {{'active' if filters.club==item.name}}" href="{{filter_url(filters,club=item.name)}}" {% if filters.club==item.name %}aria-current="true"{% endif %}>{{item.display_name}}</a></li>{% endfor %}
+   {% for item in league_clubs %}<li><label class="filter-check"><input type="checkbox" name="club" value="{{item.name}}" {{'checked' if item.name in filters.club}}><span>{{item.display_name}}</span></label></li>{% endfor %}
    </ul>
   </details>
  {% endfor %}
  </div>
-</section>
-<nav class="quick-filters" aria-label="Fixture filters">
- <details class="filter-menu" name="fixture-filter"><summary>Stadium{% for item in venues if item.id==filters.venue %}: <span title="{{item.name}}">{{item.name}}</span>{% endfor %}</summary>
-  <div class="filter-options"><a class="filter-choice {{'selected' if not filters.venue}}" href="{{filter_url(filters,venue=none)}}" {% if not filters.venue %}aria-current="true"{% endif %}>All stadiums</a>{% for item in venues %}<a class="filter-choice {{'selected' if filters.venue==item.id}}" href="{{filter_url(filters,venue=item.id)}}" {% if filters.venue==item.id %}aria-current="true"{% endif %}>{{item.name}}</a>{% endfor %}</div>
- </details>
- <details class="filter-menu" name="fixture-filter"><summary>Competition{% if filters.competition %}: <span title="{{filters.competition}}">{{filters.competition}}</span>{% endif %}</summary>
-  <div class="filter-options"><a class="filter-choice {{'selected' if not filters.competition}}" href="{{filter_url(filters,competition='')}}" {% if not filters.competition %}aria-current="true"{% endif %}>All competitions</a>{% for name in competitions %}<a class="filter-choice {{'selected' if filters.competition==name}}" href="{{filter_url(filters,competition=name)}}" {% if filters.competition==name %}aria-current="true"{% endif %}>{{name}}</a>{% endfor %}</div>
- </details>
- {% if filters.venue or filters.competition %}<a class="reset-filters" href="{{filter_url(filters,venue=none,competition='')}}">Reset filters</a>{% endif %}
-</nav>
-</div><div class="filter-actions" hidden><button type="button" class="filter-cancel">Cancel</button><button type="button" class="filter-apply">Apply filters</button></div></dialog></aside>
+</details>
+<details class="filter-section">
+ <summary>Competition</summary>
+ <div class="filter-options">{% for name in competitions %}<label class="filter-check"><input type="checkbox" name="competition" value="{{name}}" {{'checked' if name in filters.competition}}><span>{{name}}</span></label>{% endfor %}</div>
+</details>
+<details class="filter-section">
+ <summary>Stadium</summary>
+ <div class="filter-options">{% for item in venues %}<label class="filter-check"><input type="checkbox" name="venue" value="{{item.id}}" {{'checked' if item.id in filters.venue}}><span>{{item.name}}</span></label>{% endfor %}</div>
+</details>
+<div class="filter-submit"><button type="submit">Apply filters</button></div>
+</form><div class="filter-actions" hidden><button type="button" class="filter-cancel">Cancel</button><button type="submit" form="fixture-filters" class="filter-apply">Apply filters</button></div></dialog></aside>
 <section class="fixture-results">
 
 <div class="section-title"><h2>Fixtures</h2><span>{{events|length}} match{{'' if events|length==1 else 'es'}}</span></div><div class="calendar" aria-label="Fixture calendar">
 {% for day, day_events in calendar %}{% for e in day_events %}{% include '_fixture_card.html' %}{% endfor %}{% else %}<div class="empty">No fixtures match these filters.</div>{% endfor %}
-</div></section></div><script src="/static/finder.js?v=fixture-filters-2" defer></script>{% endblock %}
+</div></section></div><script src="/static/finder.js?v=portal-3" defer></script>{% endblock %}

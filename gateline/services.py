@@ -20,7 +20,7 @@ class PaymentService:
 class SimulatedPaymentService(PaymentService):
     def charge(self, amount: Decimal, test_result: str) -> PaymentResult: return PaymentResult(test_result == "success")
 
-def reserve(db:Session,event_id:int,section_id:int,quantity:int,seat_ids:list[int],selection=None,*,supporter=None,away_season_number=None) -> Reservation:
+def reserve(db:Session,event_id:int,section_id:int,quantity:int,seat_ids:list[int],selection=None,*,supporter=None,away_season_number=None,auto_assign=False) -> Reservation:
     now=datetime.now(timezone.utc); event=db.get(Event,event_id); section=db.get(Section,section_id); inv=db.scalar(select(EventInventory).where(EventInventory.event_id==event_id,EventInventory.section_id==section_id))
     if not event or not section or not inv or quantity < 1 or quantity > 10: raise ValueError("Invalid ticket selection")
     if not event.published or event.cancelled or event.sales_suspended or now < utc(event.sales_open) or now > utc(event.sales_close): raise ValueError("Tickets are not currently on sale")
@@ -37,6 +37,11 @@ def reserve(db:Session,event_id:int,section_id:int,quantity:int,seat_ids:list[in
     held_qty=db.scalar(select(func.coalesce(func.sum(Reservation.quantity),0)).where(Reservation.event_id==event_id,Reservation.section_id==section_id,Reservation.completed==False,Reservation.expires_at>now)) or 0
     if sold_qty+held_qty+quantity > inv.capacity-inv.held: raise ValueError("Your selected tickets are unavailable. Please change your selection.")
     if section.mode==Mode.ASSIGNED.value:
+        if auto_assign and not seat_ids:
+            occupied=select(Ticket.seat_id).where(Ticket.event_id==event_id,Ticket.seat_id.is_not(None),Ticket.status.in_(["sold","scanned"]))
+            held_seats=active.where(Reservation.seat_id.is_not(None)).with_only_columns(Reservation.seat_id)
+            seat_ids=list(db.scalars(select(Seat.id).join(SeatRow).where(SeatRow.section_id==section_id,Seat.available==True,Seat.id.not_in(occupied),Seat.id.not_in(held_seats)).order_by(Seat.id).limit(quantity)))
+            if len(seat_ids)!=quantity: raise ValueError("Your selected tickets are unavailable. Please change your selection.")
         if len(seat_ids)!=quantity or len(set(seat_ids))!=quantity: raise ValueError("Select distinct seats for every ticket")
         valid=set(db.scalars(select(Seat.id).join(SeatRow).where(SeatRow.section_id==section_id,Seat.id.in_(seat_ids),Seat.available==True)).all())
         if valid != set(seat_ids): raise ValueError("A selected seat is invalid or unavailable")
@@ -66,7 +71,7 @@ def reservation_rows(db, token):
     return db.scalars(select(Reservation).where(Reservation.token.in_([token]+[f"{token}-{i}" for i in range(1,10)])).order_by(Reservation.id)).all()
 
 
-def checkout(db:Session, reservation_token:str, class_id:int|None, customer_data:dict, payment_result="success", priority_code=None, voucher_code=None, vip_season_holder=False, vip_birth_dates=(), *, supporter=None, personal_index=None, attendee_birth_dates=None, disability_indices=()):
+def checkout(db:Session, reservation_token:str, class_id:int|None, customer_data:dict, payment_result="success", priority_code=None, voucher_code=None, vip_season_holder=False, vip_birth_dates=(), *, supporter=None, personal_index=None, attendee_birth_dates=None, disability_indices=(), attendee_names=None):
     now=datetime.now(timezone.utc); reservations=reservation_rows(db,reservation_token)
     if not reservations or any(r.completed or utc(r.expires_at)<=now for r in reservations): raise ValueError("Reservation has expired or has already been completed")
     event=db.get(Event,reservations[0].event_id); qty=sum(r.quantity for r in reservations)
@@ -86,6 +91,10 @@ def checkout(db:Session, reservation_token:str, class_id:int|None, customer_data
         dates=iter(vip_birth_dates)
         attendee_birth_dates=[next(dates) if tc.name=="VIP" else "" for tc,count in lines for _ in range(count)]
     birth_dates=validate_attendees(event,lines,profile,personal_index,attendee_birth_dates,disability_indices)
+    names=[str(name).strip() for name in attendee_names] if attendee_names is not None else [customer_data.get("full_name", "")] * qty
+    if len(names)!=qty: raise ValueError("Enter a full name for each ticket holder")
+    if supporter and personal_index is not None: names[personal_index]=supporter.name
+    if any(not name or len(name)>120 for name in names): raise ValueError("Enter a full name of up to 120 characters for each ticket holder")
     required=("full_name","email","address1","city","postcode","country")
     if any(not str(customer_data.get(key,"")).strip() for key in required) or "@" not in customer_data.get("email",""): raise ValueError("Enter a valid name, email and postal address")
     vip_qty=sum(count for tc,count in lines if tc.name=="VIP")
@@ -128,6 +137,8 @@ def checkout(db:Session, reservation_token:str, class_id:int|None, customer_data
     order=Order(reference="GL-"+secrets.token_hex(4).upper(),customer_id=customer.id,event_id=event.id,subtotal=subtotal,discount=discount,total=subtotal-discount,supporter_id=supporter.id if supporter else None); db.add(order); db.flush()
     payment=SimulatedPaymentService().charge(order.total,payment_result); order.payment_status="successful" if payment.successful else "failed"; order.status="complete" if payment.successful else "failed"
     if payment.successful:
+        if profile and personal_index is not None and profile.birth_date is None:
+            profile.birth_date=birth_dates[personal_index]
         ids=[r.id for r in reservations]
         changed=db.execute(update(Reservation).where(Reservation.id.in_(ids),Reservation.completed==False,Reservation.expires_at>now).values(completed=True).execution_options(synchronize_session="fetch"))
         if changed.rowcount!=len(ids):
@@ -140,7 +151,7 @@ def checkout(db:Session, reservation_token:str, class_id:int|None, customer_data
         for r in reservations:
             for _ in range(r.quantity):
                 tc,_=units[index]; net=ticket_prices[index]
-                db.add(Ticket(public_id=ticket_prefix(event.home_team)+"-"+secrets.token_hex(6).upper(),qr_token=secrets.token_urlsafe(32),order_id=order.id,event_id=event.id,section_id=r.section_id,seat_id=r.seat_id,ticket_class_id=tc.id,price=net,status="sold",attendee_user_id=supporter.id if supporter and index==personal_index else None,attendee_birth_date=birth_dates[index]))
+                db.add(Ticket(public_id=ticket_prefix(event.home_team)+"-"+secrets.token_hex(6).upper(),qr_token=secrets.token_urlsafe(32),order_id=order.id,event_id=event.id,section_id=r.section_id,seat_id=r.seat_id,ticket_class_id=tc.id,price=net,status="sold",attendee_user_id=supporter.id if supporter and index==personal_index else None,attendee_birth_date=birth_dates[index],attendee_name=names[index]))
                 index+=1
         if voucher_code: db.scalar(select(Voucher).where(func.upper(Voucher.code)==voucher_code.upper())).uses+=1
     db.commit(); db.refresh(order); return order

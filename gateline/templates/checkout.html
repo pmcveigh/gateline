@@ -3,7 +3,7 @@
 <div class="reservation-timer" data-expires="{{expires_ms}}" data-server-now="{{server_now_ms}}"><span>Time left to complete your booking</span><b role="timer" id="reservation-countdown">{{'00:00' if expired else 'Calculating…'}}</b></div>
 <p id="reservation-expired" class="form-error" role="status" {% if not expired %}hidden{% endif %}>This reservation is no longer available. <a href="/events/{{event.id}}">Select tickets again</a>.</p>
 {% if error %}<p class="form-error" role="alert">{{error}}</p>{% endif %}
-<form method="post" class="grid" id="checkout-form" data-personal="{{'true' if supporter_profile else 'false'}}" data-birth-date="{{supporter_profile.birth_date if supporter_profile else ''}}" data-force-concession="{{'true' if supporter_profile and supporter_profile.force_concession else 'false'}}">
+<form method="post" class="grid" id="checkout-form" data-full-name="{{user.name if supporter_profile else form.get('full_name','')}}" data-personal="{{'true' if supporter_profile else 'false'}}" data-birth-date="{{(supporter_profile.birth_date or '') if supporter_profile else ''}}" data-force-concession="{{'true' if supporter_profile and supporter_profile.force_concession else 'false'}}">
  <fieldset class="wide booking-summary"><legend>Your tickets</legend>
  {% if selection %}
   {% for c, count in lines %}<p class="booking-line" data-price="{{c.price}}" data-quantity="{{count}}" data-vip="{{'true' if c.name=='VIP' else 'false'}}"><span>{{count}} × {{c.name}}</span><b class="booking-line-price">£{{'%.2f'|format(c.price*count)}}</b></p>{% endfor %}
@@ -22,13 +22,24 @@
  <label {{'hidden' if away_booking}}>Season-ticket number<input name="priority_code" id="season-ticket-number" value="{{form.get('priority_code','')}}"><small>Required for priority sales or the Glentoran VIP season-ticket price.</small></label>
  {% if vip_discount_allowed %}<label class="wide checkbox-label" id="vip-discount" {% if not vip_count %}hidden{% endif %}><input type="checkbox" name="vip_season_holder" value="true" {{'checked' if form.get('vip_season_holder')}}>Apply the £50 VIP season-ticket price{% if supporter_profile %} to my own ticket{% endif %} (valid number required)</label>{% endif %}
  <fieldset class="wide" id="attendees"><legend>Who is attending?</legend>
- {% if supporter_profile %}<p>Choose your own ticket to use your profile's date of birth and access preferences.</p><label class="checkbox-label"><input type="radio" name="personal_index" value="-1" {{'checked' if form.get('personal_index',0)==-1}}>All tickets are for other people</label>{% else %}<p><a href="/account/login">Sign in</a> to use your profile and track attendance. Guest bookings are also welcome.</p>{% endif %}
- <div id="attendee-fields">{% for c in units %}{% set index=loop.index0 %}<div class="attendee" data-kind="{{restriction(c)}}" data-price="{{c.price}}" data-under="{{c.concession_under}}" data-over="{{c.concession_over}}" data-vip="{{'true' if c.name=='VIP' else 'false'}}"><b>Ticket {{loop.index}} · {{c.name}}</b>{% if supporter_profile %}<label class="checkbox-label"><input type="radio" name="personal_index" value="{{index}}" {{'checked' if form.get('personal_index',0)==index}}>This is my ticket</label>{% endif %}<label>Attendee date of birth<input type="date" name="attendee_birth_dates" value="{{form.get('attendee_birth_dates',[])[index] if index < form.get('attendee_birth_dates',[])|length else ''}}" {{'required' if restriction(c) in ['vip','child','concession']}}></label>{% if restriction(c) in ['concession','disability'] %}<label class="checkbox-label guest-disability"><input type="checkbox" name="disability_indices" value="{{index}}" {{'checked' if index in form.get('disability_indices',[])}}>Disability concession / access eligibility for this guest</label>{% endif %}<small>{% if restriction(c)=='concession' %}Under {{c.concession_under}} or over {{c.concession_over}}, or disability concession.{% elif restriction(c)=='vip' %}Aged 18 and above.{% elif restriction(c)=='child' %}Aged under 11, with a paying adult in this booking.{% else %}Date of birth is optional for an Adult ticket.{% endif %}</small></div>{% endfor %}</div>
+ {% if supporter_profile %}<p>Choose your own ticket to use your saved details and access preferences.</p><label class="checkbox-label"><input type="radio" name="personal_index" value="-1" {{'checked' if form.get('personal_index',0)==-1}}>All tickets are for other people</label>{% else %}<p><a href="/account/login">Sign in</a> to use your profile and track attendance. Guest bookings are also welcome.</p>{% endif %}
+ <div id="attendee-fields">
+ {% for c in units %}{% set index=loop.index0 %}{% set kind=restriction(c) %}
+ <div class="attendee" data-kind="{{kind}}" data-price="{{c.price}}" data-under="{{c.concession_under}}" data-over="{{c.concession_over}}" data-vip="{{'true' if c.name=='VIP' else 'false'}}">
+ <b>Ticket {{loop.index}} · {{c.name}}</b>
+ {% if supporter_profile %}<label class="checkbox-label"><input type="radio" name="personal_index" value="{{index}}" {{'checked' if form.get('personal_index',0)==index}}>This is my ticket</label>{% endif %}
+ <label>Ticket holder's full name<input name="attendee_names" maxlength="120" required value="{{form.get('attendee_names',[])[index] if index < form.get('attendee_names',[])|length else user.name if supporter_profile and form.get('personal_index',0)==index else form.get('full_name','') if quantity==1 else ''}}"></label>
+ {% if kind in ['vip','child','concession'] %}
+ <label class="attendee-dob">Attendee date of birth<input type="date" name="attendee_birth_dates" value="{{form.get('attendee_birth_dates',[])[index] if index < form.get('attendee_birth_dates',[])|length else supporter_profile.birth_date if supporter_profile and form.get('personal_index',0)==index and supporter_profile.birth_date else ''}}" required></label>
+ {% else %}<input type="hidden" name="attendee_birth_dates" value="">{% endif %}
+ {% if kind in ['concession','disability'] %}<label class="checkbox-label guest-disability"><input type="checkbox" name="disability_indices" value="{{index}}" {{'checked' if index in form.get('disability_indices',[])}}>Disability concession / access eligibility for this guest</label>{% endif %}
+ <small>{% if kind=='concession' %}Under {{c.concession_under}} or over {{c.concession_over}}, or disability concession.{% elif kind=='vip' %}Aged 18 and above.{% elif kind=='child' %}Aged under 11, with a paying adult in this booking.{% endif %}</small>
+ </div>{% endfor %}</div>
  </fieldset>
  <label>Voucher code<input name="voucher_code" value="{{form.get('voucher_code','')}}"></label>
  <label>Test payment<select name="test_result"><option value="success">Approve test payment</option><option value="fail">Decline test payment</option></select></label>
  <button class="wide" id="complete-payment" {{'disabled' if expired}}>Complete test payment</button>
 </form>
 <noscript><p>The reservation expires at {{reservation.expires_at.strftime('%H:%M')}} UTC. Eligibility and prices are checked when you pay.</p></noscript>
-</div><script src="/static/checkout.js" defer></script>
+</div><script src="/static/checkout.js?v=portal-3" defer></script>
 {% include "_demo_codes.html" %}{% endblock %}

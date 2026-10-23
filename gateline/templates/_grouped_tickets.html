@@ -1,0 +1,4 @@
+<div class="cards ticket-groups">{% for event_id, tickets in tickets_by_event.items() %}{% set first=tickets[0] %}
+<article class="portal-row"><div><h3>{{first.order.event.title}}</h3><p>{{local_time(first.order.event.starts_at).strftime('%d %b %Y · %H:%M')}} · {{first.order.event.competition}}</p>
+<nav class="ticket-switcher" aria-label="Ticket holders for {{first.order.event.title}}">{% for t in tickets %}<a class="button secondary" href="/tickets/{{t.public_id}}?back={{quote(request.url.path,safe='')}}">{{t.attendee_name or t.order.customer.full_name}}</a>{% endfor %}</nav>
+</div></article>{% else %}<p class="empty">Your booked and claimed match tickets will appear here.</p>{% endfor %}</div>
