@@ -6,14 +6,14 @@
 <button class="filter-toggle filter-close" type="button" aria-label="Collapse filters" hidden>←</button>
 <div class="sidebar-content">
 <section class="club-picker" aria-labelledby="club-picker-title">
- <div class="section-title"><h2 id="club-picker-title">Browse by club</h2><a class="club-card {{'active' if not filters.club}}" href="{{filter_url(filters,club='')}}" {% if not filters.club %}aria-current="true"{% endif %}>All clubs</a></div>
+ <div class="section-title"><h2 id="club-picker-title">Browse by club</h2></div><a class="club-card {{'active' if not filters.club}}" href="{{filter_url(filters,club='')}}" {% if not filters.club %}aria-current="true"{% endif %}>All clubs</a>
  <div class="league-list">
  {% for league, league_clubs in club_groups %}
   <details class="league-group" {% if filters.club in league_clubs|map(attribute='name')|list or (not filters.club and loop.first) %}open{% endif %}>
    <summary><span>{{league}}</span><small>{{league_clubs|length}} club{{'' if league_clubs|length==1 else 's'}}</small></summary>
-   <div class="club-grid">
-   {% for item in league_clubs %}<a class="club-card {{'active' if filters.club==item.name}}" href="{{filter_url(filters,club=item.name)}}" {% if filters.club==item.name %}aria-current="true"{% endif %}>{{item.display_name}}</a>{% endfor %}
-   </div>
+   <ul class="club-list">
+   {% for item in league_clubs %}<li><a class="club-card {{'active' if filters.club==item.name}}" href="{{filter_url(filters,club=item.name)}}" {% if filters.club==item.name %}aria-current="true"{% endif %}>{{item.display_name}}</a></li>{% endfor %}
+   </ul>
   </details>
  {% endfor %}
  </div>
@@ -32,4 +32,4 @@
 
 <div class="section-title"><h2>Fixtures</h2><span>{{events|length}} match{{'' if events|length==1 else 'es'}}</span></div><div class="calendar" aria-label="Fixture calendar">
 {% for day, day_events in calendar %}{% for e in day_events %}{% include '_fixture_card.html' %}{% endfor %}{% else %}<div class="empty">No fixtures match these filters.</div>{% endfor %}
-</div></section></div><script src="/static/finder.js" defer></script>{% endblock %}
+</div></section></div><script src="/static/finder.js?v=fixture-filters-2" defer></script>{% endblock %}
